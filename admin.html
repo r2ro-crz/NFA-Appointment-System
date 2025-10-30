@@ -1,0 +1,58 @@
+<main class="admin-dashboard">
+    <aside class="sidebar">
+        <nav>
+            <ul>
+                <li><a href="manage_users.php" class="active">Manage Operators</a></li>
+                <li><a href="view_logs.php">Activity Logs</a></li>
+                <li><a href="login.php">Logout</a></li>
+            </ul>
+        </nav>
+    </aside>
+
+    <section class="main-content">
+        <h2>Manage Processor (Operator) Accounts</h2>
+
+        <div class="user-management-actions">
+            <button id="add_new_user_btn">Create New Operator Account</button>
+            
+            <div id="new_user_form_container" style="display: none;">
+                <h3>New User Details</h3>
+                <form id="create_user_form" action="php/create_user.php" method="POST">
+                    </form>
+            </div>
+        </div>
+
+        <div class="operator-list-container">
+            <table id="operator_list_table" class="data-table">
+                <thead>
+                    <tr>
+                        <th>Username</th>
+                        <th>Assigned Branch</th>
+                        <th>Status</th>
+                        <th>Last Login</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    </tbody>
+            </table>
+        </div>
+        
+        <div id="activity_logs_view" style="display: none;">
+            <h3>Processor Activity Logs</h3>
+            <table id="logs_table" class="data-table">
+                <thead>
+                    <tr>
+                        <th>Timestamp</th>
+                        <th>Processor</th>
+                        <th>Action Performed</th>
+                        <th>Details</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    </tbody>
+            </table>
+        </div>
+
+    </section>
+</main>

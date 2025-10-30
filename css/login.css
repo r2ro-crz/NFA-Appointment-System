@@ -1,0 +1,175 @@
+:root {
+    --nfa-green: #007A33;
+    --nfa-dark: #1A1A1A;
+    --accent-blue: #007BFF;
+    --full-red: #DC3545;
+    --spacing: 20px;
+}
+
+/* Global Reset/Base */
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+body {
+    font-family: 'Arial', sans-serif;
+    line-height: 1.6;
+    color: var(--nfa-dark);
+}
+
+/* =========================================
+   A. LANDING PAGE STYLES
+========================================= */
+.landing-body {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+    background-color: var(--nfa-green); /* NFA Green Background */
+}
+.landing-container {
+    background: white;
+    padding: 40px;
+    border-radius: 8px;
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.3);
+    width: 100%;
+    max-width: 500px;
+    text-align: center;
+}
+.landing-container h1 {
+    color: var(--nfa-green);
+    font-size: 2.2em;
+    margin-bottom: 5px;
+}
+.landing-container h2 {
+    color: #666;
+    font-size: 1.1em;
+    font-weight: normal;
+    margin-bottom: 30px;
+}
+.action-buttons {
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+    margin-bottom: 30px;
+}
+.action-button {
+    display: block;
+    text-decoration: none;
+    padding: 15px 20px;
+    border-radius: 4px;
+    font-size: 1.1em;
+    font-weight: bold;
+    transition: background-color 0.3s, transform 0.2s;
+}
+.login-button {
+    background-color: var(--accent-blue);
+    color: white;
+    border: 2px solid var(--accent-blue);
+}
+.login-button:hover {
+    background-color: #0056b3;
+    transform: translateY(-2px);
+}
+.farmer-button {
+    background-color: white;
+    color: var(--nfa-green);
+    border: 2px solid var(--nfa-green);
+}
+.farmer-button:hover {
+    background-color: var(--nfa-light);
+    transform: translateY(-2px);
+}
+.note {
+    font-size: 0.9em;
+    color: #999;
+}
+
+/* =========================================
+   B. STAFF LOGIN PAGE STYLES (Used by login.php)
+========================================= */
+.login-body {
+    /* Uses the same background as landing-body */
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+    background-color: var(--nfa-green);
+}
+.login-container {
+    /* Uses the same container styles as landing-container */
+    background: white;
+    padding: 40px;
+    border-radius: 8px;
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.3);
+    width: 100%;
+    max-width: 400px;
+    text-align: center;
+}
+.login-container p {
+    margin-bottom: 20px;
+    color: #666;
+}
+.form-group {
+    text-align: left;
+    margin-bottom: 15px;
+}
+.form-group label {
+    display: block;
+    margin-bottom: 5px;
+    font-weight: bold;
+}
+.form-group input[type="text"], 
+.form-group input[type="password"] {
+    width: 100%;
+    padding: 10px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 16px;
+}
+.login-button {
+    width: 100%;
+    background-color: var(--nfa-green); /* Use NFA Green for primary login */
+    color: white;
+    padding: 12px;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 18px;
+    transition: background-color 0.3s;
+    margin-top: 10px;
+}
+.login-button:hover {
+    background-color: #005f28;
+}
+.error {
+    color: white;
+    background-color: var(--full-red);
+    padding: 10px;
+    border-radius: 4px;
+    margin-bottom: 15px;
+    font-weight: bold;
+}
+.back-link {
+    margin-top: 20px;
+    font-size: 0.9em;
+}
+.back-link a {
+    color: var(--accent-blue);
+    text-decoration: none;
+}
+.back-link a:hover {
+    text-decoration: underline;
+}
+.password-toggle {
+    position: absolute;
+    right: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+    cursor: hand;
+    user-select: none;
+    color: #666;
+    font-size: 0.9em;
+    padding: 5px;
+}
