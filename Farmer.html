@@ -3,96 +3,184 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>NFA Farmer Appointment System</title>
+    <link rel="icon" href="https://public-frontend-cos.metadl.com/mgx/img/favicon.png" type="image/png">
+    <title>NFA Farmer's Appointment System</title>
     <link rel="stylesheet" href="css/style.css">
-    <link rel="icon" href="img/download.png">
 </head>
 <body>
-
-    <header>
-        <h1>National Food Authority (NFA) - Appointment Scheduling</h1>
+    <header class="header">
+        <div class="container">
+            <div class="logo">
+                <h1>National Food Authority</h1>
+                <p>Farmer's Appointment System</p>
+            </div>
+            <nav class="nav">
+                <a href="index.html" class="login-btn">Main Page</a>
+            </nav>
+        </div>
     </header>
 
-    <main class="farmer-interface">
-        <section class="selection-panel">
-            <h2>1. Select Location and Date</h2>
-            <div class="location-selection">
-                <div class="dropdown-group">
-                    <label for="region_select">Region:</label>
-                    <select id="region_select" onchange="loadBranches()">
+    <main class="main">
+        <div class="container">
+            <section class="appointment-section">
+                <h2>Schedule Your Appointment</h2>
+                <p>Select your region and branch to view available appointment slots</p>
+
+                <div class="selection-panel">
+                    <div class="dropdown-group">
+                        <label for="region">Region:</label>
+                        <select id="region" name="region" required>
+                            <option value="">Select Region</option>
+                            <option value="ncr">National Capital Region (NCR)</option>
+                            <option value="region1">Region I - Ilocos</option>
+                            <option value="region2">Region II - Cagayan Valley</option>
+                            <option value="region3">Region III - Central Luzon</option>
+                            <option value="region4a">Region IV-A - CALABARZON</option>
                         </select>
-                </div>
-                <div class="dropdown-group">
-                    <label for="branch_select">Branch:</label>
-                    <select id="branch_select" onchange="loadCalendar()">
+                    </div>
+
+                    <div class="dropdown-group">
+                        <label for="branch">Branch:</label>
+                        <select id="branch" name="branch" required disabled>
+                            <option value="">Select Branch</option>
                         </select>
-                </div>
-            </div>
-        </section>
-
-        <section class="calendar-panel">
-            <div id="appointment_calendar">
-                </div>
-            <div class="slot-details-legend">
-                <span><div class="available-indicator"></div> Available</span>
-                <span><div class="full-indicator"></div> Full / Disabled</span>
-            </div>
-        </section>
-        
-        <section id="farmer_form_section" style="display: none;">
-            <h2>2. Enter Your Information</h2>
-            <form id="farmer_appointment_form" action="php/submit_appointment.php" method="POST">
-                
-                <input type="hidden" id="selected_date" name="selected_date">
-                <input type="hidden" id="selected_slot" name="selected_slot">
-
-                <div class="form-group">
-                    <label for="first_name">First Name:</label>
-                    <input type="text" id="first_name" name="first_name" required>
-                </div>
-                <div class="form-group">
-                    <label for="middle_name">Middle Name (Optional):</label>
-                    <input type="text" id="middle_name" name="middle_name">
-                </div>
-                <div class="form-group">
-                    <label for="last_name">Last Name:</label>
-                    <input type="text" id="last_name" name="last_name" required>
-                </div>
-                <div class="form-group">
-                    <label for="email">Email Address:</label>
-                    <input type="email" id="email" name="email" required>
-                </div>
-                <div class="form-group">
-                    <label for="contact_number">Contact Number:</label>
-                    <input type="tel" id="contact_number" name="contact_number" required>
-                </div>
-                <div class="form-group">
-                    <label for="gender">Gender:</label>
-                    <select id="gender" name="gender" required>
-                        <option value="">Select Gender</option>
-                        <option value="Male">Male</option>
-                        <option value="Female">Female</option>
-                        <option value="Other">Other</option>
-                    </select>
+                    </div>
                 </div>
 
-                <div class="form-group captcha-group">
-                    <label for="captcha_input">Verification:</label>
-                    <span id="captcha_display">[CAPTCHA Code]</span> 
-                    <input type="text" id="captcha_input" name="captcha_input" required placeholder="Enter the code above">
+                <!-- Capacity Information Display -->
+                <div class="capacity-info" id="capacityInfo" style="display: none;">
+                    <h3>Branch Capacity Information</h3>
+                    <div class="capacity-grid">
+                        <div class="capacity-card total">
+                            <div class="capacity-icon">📊</div>
+                            <div class="capacity-details">
+                                <h4>Total Daily Capacity</h4>
+                                <p class="capacity-number" id="totalCapacity">0</p>
+                                <span class="capacity-label">appointments per day</span>
+                            </div>
+                        </div>
+                        
+                        <div class="capacity-card morning">
+                            <div class="capacity-icon">🌅</div>
+                            <div class="capacity-details">
+                                <h4>Morning Session (AM)</h4>
+                                <p class="capacity-number" id="amCapacity">0</p>
+                                <span class="capacity-label">8:00 AM - 12:00 PM</span>
+                            </div>
+                        </div>
+                        
+                        <div class="capacity-card afternoon">
+                            <div class="capacity-icon">🌇</div>
+                            <div class="capacity-details">
+                                <h4>Afternoon Session (PM)</h4>
+                                <p class="capacity-number" id="pmCapacity">0</p>
+                                <span class="capacity-label">1:00 PM - 5:00 PM</span>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="capacity-note">
+                        <p><strong>Note:</strong> Capacity may vary by date. Green dates in the calendar below indicate available slots.</p>
+                    </div>
                 </div>
-                
-                <button type="submit" class="submit-button">Submit Appointment</button>
-            </form>
-        </section>
+
+                <div class="calendar-container" id="calendarContainer" style="display: none;">
+                    <h3>Available Appointment Dates</h3>
+                    <div class="calendar-header">
+                        <button id="prevMonth" class="nav-btn">&lt;</button>
+                        <span id="currentMonth"></span>
+                        <button id="nextMonth" class="nav-btn">&gt;</button>
+                    </div>
+                    <div class="calendar" id="calendar"></div>
+                    
+                    <div class="time-slots" id="timeSlots" style="display: none;">
+                        <h4>Select Time Slot for <span id="selectedDateDisplay"></span></h4>
+                        <div class="slots">
+                            <button class="time-slot" data-time="AM">
+                                <div class="slot-header">Morning (8:00 AM - 12:00 PM)</div>
+                                <div class="slot-availability" id="amAvailability">Available slots: --</div>
+                            </button>
+                            <button class="time-slot" data-time="PM">
+                                <div class="slot-header">Afternoon (1:00 PM - 5:00 PM)</div>
+                                <div class="slot-availability" id="pmAvailability">Available slots: --</div>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="appointment-form" id="appointmentForm" style="display: none;">
+                    <h3>Appointment Details</h3>
+                    <form id="farmerForm">
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="firstName">First Name *</label>
+                                <input type="text" id="firstName" name="firstName" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="middleName">Middle Name</label>
+                                <input type="text" id="middleName" name="middleName">
+                            </div>
+                            <div class="form-group">
+                                <label for="lastName">Last Name *</label>
+                                <input type="text" id="lastName" name="lastName" required>
+                            </div>
+                        </div>
+
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="email">Email Address *</label>
+                                <input type="email" id="email" name="email" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="contact">Contact Number *</label>
+                                <input type="tel" id="contact" name="contact" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="gender">Gender *</label>
+                                <select id="gender" name="gender" required>
+                                    <option value="">Select Gender</option>
+                                    <option value="male">Male</option>
+                                    <option value="female">Female</option>
+                                    <option value="other">Other</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div class="appointment-summary">
+                            <h4>Appointment Summary</h4>
+                            <p><strong>Region:</strong> <span id="summaryRegion"></span></p>
+                            <p><strong>Branch:</strong> <span id="summaryBranch"></span></p>
+                            <p><strong>Date:</strong> <span id="summaryDate"></span></p>
+                            <p><strong>Time:</strong> <span id="summaryTime"></span></p>
+                        </div>
+
+                        <div class="captcha-section">
+                            <label for="captcha">Please solve: <span id="captchaQuestion"></span></label>
+                            <input type="number" id="captcha" name="captcha" required>
+                        </div>
+
+                        <button type="submit" class="submit-btn">Submit Appointment</button>
+                    </form>
+                </div>
+            </section>
+        </div>
     </main>
 
-    <footer>
-        <p>&copy; NFA Appointment System</p>
+    <footer class="footer">
+        <div class="container">
+            <p>&copy; 2024 National Food Authority. All rights reserved.</p>
+        </div>
     </footer>
-    
-    <script src="lib/fullcalendar/main.min.js"></script>
-    <script src="js/farmer_app.js"></script>
 
+    <div class="modal" id="successModal">
+        <div class="modal-content">
+            <h3>Appointment Confirmed!</h3>
+            <p>Your appointment has been successfully scheduled. You will receive a confirmation email shortly.</p>
+            <p><strong>Reference Number:</strong> <span id="referenceNumber"></span></p>
+            <button onclick="closeModal()" class="modal-btn">Close</button>
+        </div>
+    </div>
+
+    <script src="js/script.js"></script>
 </body>
 </html>
