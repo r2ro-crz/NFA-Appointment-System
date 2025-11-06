@@ -8,6 +8,10 @@
     <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
+    <div class="progress-bar-container">
+        <div class="progress-bar" id="progressBar"></div>
+    </div>
+    
     <header class="header">
         <div class="container">
             <div class="logo">
@@ -15,7 +19,7 @@
                 <p>Farmer's Appointment System</p>
             </div>
             <nav class="nav">
-                <a href="index.html" class="login-btn">Main Page</a>
+                <a href="landing.html" class="login-btn">Main Page</a>
             </nav>
         </div>
     </header>
@@ -23,64 +27,50 @@
     <main class="main">
         <div class="container">
             <section class="appointment-section">
+                <div id="step-indicator" style="text-align: center; margin-bottom: 2rem;">
+                    <span id="step1" style="font-weight: bold; color: #3498db;">Step 1: Location</span> &rarr;
+                    <span id="step2">Step 2: Date & Time</span> &rarr;
+                    <span id="step3">Step 3: Details & Submit</span>
+                </div>
+                
                 <h2>Schedule Your Appointment</h2>
                 <p>Select your region and branch to view available appointment slots</p>
 
                 <div class="selection-panel">
                     <div class="dropdown-group">
-                        <label for="region">Region:</label>
+                        <label for="region">Region: *</label>
                         <select id="region" name="region" required>
                             <option value="">Select Region</option>
-                            <option value="ncr">National Capital Region (NCR)</option>
-                            <option value="region1">Region I - Ilocos</option>
-                            <option value="region2">Region II - Cagayan Valley</option>
-                            <option value="region3">Region III - Central Luzon</option>
-                            <option value="region4a">Region IV-A - CALABARZON</option>
-                        </select>
+                            </select>
                     </div>
 
                     <div class="dropdown-group">
-                        <label for="branch">Branch:</label>
+                        <label for="branch">Branch: *</label>
                         <select id="branch" name="branch" required disabled>
                             <option value="">Select Branch</option>
                         </select>
                     </div>
                 </div>
 
-                <!-- Capacity Information Display -->
                 <div class="capacity-info" id="capacityInfo" style="display: none;">
-                    <h3>Branch Capacity Information</h3>
+                    <h3>Branch Volume Capacity</h3>
                     <div class="capacity-grid">
+                        
                         <div class="capacity-card total">
-                            <div class="capacity-icon">📊</div>
-                            <div class="capacity-details">
-                                <h4>Total Daily Capacity</h4>
-                                <p class="capacity-number" id="totalCapacity">0</p>
-                                <span class="capacity-label">appointments per day</span>
+                            <div class="capacity-icon">🍚</div> <div class="capacity-details">
+                                <h4>Available Volume to Accept</h4>
+                                <p class="capacity-number" id="availableVolume">0</p>
+                                <span class="capacity-label">kilograms (kg) remaining</span>
                             </div>
                         </div>
                         
-                        <div class="capacity-card morning">
-                            <div class="capacity-icon">🌅</div>
-                            <div class="capacity-details">
-                                <h4>Morning Session (AM)</h4>
-                                <p class="capacity-number" id="amCapacity">0</p>
-                                <span class="capacity-label">8:00 AM - 12:00 PM</span>
-                            </div>
-                        </div>
+                        <input type="hidden" id="amSlotCapacity" value="0">
+                        <input type="hidden" id="pmSlotCapacity" value="0">
                         
-                        <div class="capacity-card afternoon">
-                            <div class="capacity-icon">🌇</div>
-                            <div class="capacity-details">
-                                <h4>Afternoon Session (PM)</h4>
-                                <p class="capacity-number" id="pmCapacity">0</p>
-                                <span class="capacity-label">1:00 PM - 5:00 PM</span>
-                            </div>
-                        </div>
                     </div>
                     
                     <div class="capacity-note">
-                        <p><strong>Note:</strong> Capacity may vary by date. Green dates in the calendar below indicate available slots.</p>
+                        <p><strong>Note:</strong> The number above reflects the **current available warehouse space**.</p>
                     </div>
                 </div>
 
@@ -111,6 +101,7 @@
                 <div class="appointment-form" id="appointmentForm" style="display: none;">
                     <h3>Appointment Details</h3>
                     <form id="farmerForm">
+                        
                         <div class="form-row">
                             <div class="form-group">
                                 <label for="firstName">First Name *</label>
@@ -145,6 +136,23 @@
                                 </select>
                             </div>
                         </div>
+                        
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="volume">Volume (in Kilograms - kg) *</label>
+                                <input type="number" id="volume" name="volume" min="1" step="any" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="farmerType">Farmer Type *</label>
+                                <select id="farmerType" name="farmerType" required>
+                                    <option value="">Select Farmer Type</option>
+                                    </select>
+                            </div>
+                             <div class="form-group" style="visibility: hidden;">
+                                <label>&nbsp;</label>
+                                <input type="hidden">
+                            </div>
+                        </div>
 
                         <div class="appointment-summary">
                             <h4>Appointment Summary</h4>
@@ -155,8 +163,9 @@
                         </div>
 
                         <div class="captcha-section">
-                            <label for="captcha">Please solve: <span id="captchaQuestion"></span></label>
-                            <input type="number" id="captcha" name="captcha" required>
+                            <label for="captcha">Please type the following word: <span id="captchaQuestion" style="font-family: cursive; font-size: 1.2em; color: #3498db;"></span></label>
+                            <input type="text" id="captcha" name="captcha" required autocomplete="off">
+                            <button type="button" id="refreshCaptcha" class="nav-btn" style="margin-top: 5px; padding: 0.5rem;">Refresh</button>
                         </div>
 
                         <button type="submit" class="submit-btn">Submit Appointment</button>
@@ -181,6 +190,6 @@
         </div>
     </div>
 
-    <script src="js/script.js"></script>
+    <script src="js/farmer_app.js"></script>
 </body>
 </html>

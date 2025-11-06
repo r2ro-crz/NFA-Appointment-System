@@ -13,21 +13,8 @@ document.addEventListener('DOMContentLoaded', () => {
         }, 100);
     }
 
-    // Add visual feedback on button clicks
+    // Add visual feedback on button interactions
     actionButtons.forEach(button => {
-        button.addEventListener('mousedown', (e) => {
-            // Apply a pressed state immediately on click
-            e.target.style.transform = 'translateY(0)';
-            e.target.style.boxShadow = 'none';
-        });
-
-        button.addEventListener('mouseup', (e) => {
-            // Restore the subtle hover/lifted state after release
-            e.target.style.transform = 'translateY(-2px)';
-            e.target.style.boxShadow = '0 4px 8px rgba(0, 0, 0, 0.1)';
-        });
-
-        // Add a shadow on hover for a "lifted" effect
         button.addEventListener('mouseenter', (e) => {
             e.target.style.boxShadow = '0 4px 8px rgba(0, 0, 0, 0.1)';
             e.target.style.transform = 'translateY(-2px)';

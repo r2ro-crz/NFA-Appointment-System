@@ -39,7 +39,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
 
                     // Redirect based on user role
                     if ($_SESSION["user_type"] == 'Admin') {
-                        header("location: admin.html"); 
+                        header("location: ../admin.html"); 
                     } else { // Processor/Operator
                         header("location: operator.html");
                     }

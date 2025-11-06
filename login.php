@@ -22,7 +22,7 @@ if (isset($_GET['error']) && $_GET['error'] == 1) {
             <div class="error"><?php echo nl2br(htmlspecialchars($error_message)); ?></div>
         <?php endif; ?>
 
-        <form action="authenticate.php" method="POST">
+        <form action="php_helper/authenticate.php" method="POST">
             <div class="form-group">
                 <label for="username">Username:</label>
                 <input type="text" id="username" name="username">
@@ -38,7 +38,7 @@ if (isset($_GET['error']) && $_GET['error'] == 1) {
         </form>
 
         <p class="back-link">
-            <a href="index.html">← Back to Main Page</a>
+            <a href="landing.html">← Back to Main Page</a>
         </p>
     </div>
     
