@@ -34,6 +34,8 @@ async function fetchApi(action, params = {}, method = 'GET', body = null) {
     try {
         const url = new URL(API_URL, window.location.href);
         url.searchParams.append('action', action);
+        // Debug: show constructed URL
+        console.debug(`[fetchApi] ${method} ${action} -> ${url.toString()}`, params, body);
         
         const fetchOptions = {
             method: method,
@@ -54,6 +56,7 @@ async function fetchApi(action, params = {}, method = 'GET', body = null) {
             throw new Error(`HTTP error! Status: ${response.status}`);
         }
         const result = await response.json();
+        console.debug('[fetchApi] result for', action, result);
         if (result.success === false) {
             // The error object comes directly from the server-side logic
             throw new Error(result.error || `API call to ${action} failed`);
@@ -61,6 +64,7 @@ async function fetchApi(action, params = {}, method = 'GET', body = null) {
         return result; 
     } catch (error) {
         console.error(`Error in ${action}:`, error);
+        // Keep an alert for user but also log detailed info for debugging
         alert(`Failed to load data: ${error.message}`);
         return null;
     }
@@ -80,31 +84,28 @@ async function fetchRegions() {
     }
 }
 
-// In Appointment_System/js/farmer_app.js
-
-// In Appointment_System/js/farmer_app.js
-
 async function fetchBranches(regionId) {
+    console.debug('[fetchBranches] regionId:', regionId);
     const result = await fetchApi('getBranches', { region_id: regionId });
     const select = document.getElementById('branch');
     
     // Clear existing options, keeping the default 'Select Branch' text
     select.innerHTML = '<option value="">Select Branch</option>';
-    
-    // --- FIX APPLIED HERE ---
-    // Always disable by default, then enable if branches are found.
+    // Always disable by default; we'll enable only if good data is returned.
     select.disabled = true; 
     
     // If successful and data exists
-    if (result && result.data && result.data.length > 0) {
-        // FIX: Ensure the dropdown is enabled as soon as valid data is found
+    if (result && Array.isArray(result.data) && result.data.length > 0) {
+        // Ensure the dropdown is enabled as soon as valid data is found
         select.disabled = false;
+        console.debug('[fetchBranches] branches found:', result.data.length);
         
         result.data.forEach(branch => {
             const option = document.createElement('option');
+            // Data fields (branch_id, branch_name) match PHP output
             option.value = branch.branch_id;
             option.textContent = branch.branch_name;
-            option.dataset.name = branch.branch_name; // Use for summary display later
+            option.dataset.name = branch.branch_name;
             select.appendChild(option);
         });
     }
@@ -146,7 +147,8 @@ async function fetchFarmerTypes() {
     if (result && result.data) {
         result.data.forEach(type => {
             const option = document.createElement('option');
-            option.value = type.type_id;
+            // FIX: Changed from type.type_id to type.farmer_type_id
+            option.value = type.farmer_type_id; 
             option.textContent = type.type_name;
             select.appendChild(option);
         });
@@ -250,6 +252,16 @@ function hideCalendar() {
     document.getElementById('calendarContainer').style.display = 'none';
     hideTimeSlots();
     hideAppointmentForm();
+}
+
+// Ensure hideTimeSlots exists to avoid ReferenceError when other functions call it.
+function hideTimeSlots() {
+    const timeSlotsContainer = document.getElementById('timeSlots');
+    if (!timeSlotsContainer) return;
+
+    // Hide the container and clear any selected slot UI state
+    timeSlotsContainer.style.display = 'none';
+    timeSlotsContainer.querySelectorAll('.time-slot.selected').forEach(slot => slot.classList.remove('selected'));
 }
 
 function changeMonth(direction) {

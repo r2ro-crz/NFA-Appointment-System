@@ -49,7 +49,7 @@ switch ($action) {
             break;
         }
         try {
-            // FIX: Reverted table name to the user-confirmed 'branch' (singular)
+            // FIX APPLIED: Using the confirmed singular table name 'branch' from the DDL.
             $stmt = $pdo->prepare("SELECT branch_id, branch_name FROM branch WHERE region_id = ? ORDER BY branch_name");
             $stmt->execute([$region_id]);
             $branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
