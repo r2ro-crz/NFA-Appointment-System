@@ -535,9 +535,23 @@ async function handleFormSubmission(e) {
 }
 
 async function submitAppointment(formData) {
-    const result = await fetchApi('submitAppointment', {}, 'POST', formData);
-    
-    return { success: result.success, referenceNumber: result.referenceNumber }; 
+    try {
+        const result = await fetchApi('submitAppointment', {}, 'POST', formData);
+        if (!result) {
+            throw new Error('No response from server');
+        }
+        return { 
+            success: result.success === true, 
+            referenceNumber: result.referenceNumber,
+            error: result.error || null
+        }; 
+    } catch (error) {
+        console.error('Submit appointment error:', error);
+        return {
+            success: false,
+            error: error.message || 'Failed to submit appointment'
+        };
+    }
 }
 
 function resetForm() {

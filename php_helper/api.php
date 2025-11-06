@@ -62,9 +62,10 @@ switch ($action) {
 
     case 'getBranchInfo':
         // 3. Consolidated fetch for Capacity, Slots, and Availability
-        $branch_id = sanitize_input($_GET['branch_id'] ?? 0);
-        $start_date = sanitize_input($_GET['start_date'] ?? date('Y-m-01'));
-        $end_date = sanitize_input($_GET['end_date'] ?? date('Y-m-t'));
+    // Ensure branch_id is an integer to avoid SQL type/format issues
+    $branch_id = (int)sanitize_input($_GET['branch_id'] ?? 0);
+    $start_date = sanitize_input($_GET['start_date'] ?? date('Y-m-01'));
+    $end_date = sanitize_input($_GET['end_date'] ?? date('Y-m-t'));
 
         if (!$branch_id) {
             http_response_code(400);
@@ -73,11 +74,15 @@ switch ($action) {
         }
 
         try {
+            error_log("DEBUG: getBranchInfo starting for branch_id=$branch_id");
+            
             // A. Fetch Volume Capacity (Q3)
+            error_log("DEBUG: Fetching volume capacity");
             $stmt_vol = $pdo->prepare("SELECT warehouse_capacity, inventory FROM volume_capacity WHERE branch_id = :branch_id");
             $stmt_vol->bindParam(':branch_id', $branch_id, PDO::PARAM_INT);
             $stmt_vol->execute();
             $vol_data = $stmt_vol->fetch(PDO::FETCH_ASSOC);
+            error_log("DEBUG: Volume data: " . json_encode($vol_data));
             
             $volume_info = [
                 'total_capacity' => (float)($vol_data['warehouse_capacity'] ?? 0),
@@ -86,15 +91,31 @@ switch ($action) {
             ];
 
             // B. Fetch Default Slot Capacity (Used by Q4/Q5 logic)
-            $stmt_default_cap = $pdo->prepare("SELECT capacity_am, capacity_pm FROM branch_slot_capacity WHERE branch_id = :branch_id AND date IS NULL");
+            error_log("DEBUG: Fetching slot capacity");
+            // First try with date IS NULL for defaults
+            $stmt_default_cap = $pdo->prepare("SELECT capacity_am, capacity_pm FROM branch_slot_capacity WHERE branch_id = :branch_id AND `date` IS NULL");
             $stmt_default_cap->bindParam(':branch_id', $branch_id, PDO::PARAM_INT);
             $stmt_default_cap->execute();
-            $default_capacity = $stmt_default_cap->fetch(PDO::FETCH_ASSOC) ?: ['capacity_am' => 0, 'capacity_pm' => 0];
+            $default_capacity = $stmt_default_cap->fetch(PDO::FETCH_ASSOC);
+            
+            if (!$default_capacity) {
+                // If no default found, try getting the latest capacity for this branch
+                error_log("DEBUG: No default capacity found, checking for any capacity entry");
+                $stmt_any_cap = $pdo->prepare("SELECT capacity_am, capacity_pm FROM branch_slot_capacity WHERE branch_id = :branch_id ORDER BY capacity_id DESC LIMIT 1");
+                $stmt_any_cap->bindParam(':branch_id', $branch_id, PDO::PARAM_INT);
+                $stmt_any_cap->execute();
+                $default_capacity = $stmt_any_cap->fetch(PDO::FETCH_ASSOC);
+            }
+            
+            // If still no capacity found, use safe defaults
+            $default_capacity = $default_capacity ?: ['capacity_am' => 5, 'capacity_pm' => 5];
+            error_log("DEBUG: Using capacity: " . json_encode($default_capacity));
 
             // C. Fetch Booked Appointments (Q4/Q5)
-            $sql_booked = "SELECT date, time_slot, COUNT(appointment_id) as booked_count FROM appointments 
-                           WHERE branch_id = :branch_id AND date BETWEEN :start_date AND :end_date 
-                           AND status != 'Cancelled' GROUP BY date, time_slot";
+            // Quote `date` to avoid ambiguity with SQL DATE function/keyword
+            $sql_booked = "SELECT `date`, time_slot, COUNT(appointment_id) as booked_count FROM appointments 
+                           WHERE branch_id = :branch_id AND `date` BETWEEN :start_date AND :end_date 
+                           AND status != 'Cancelled' GROUP BY `date`, time_slot";
             $stmt_booked = $pdo->prepare($sql_booked);
             $stmt_booked->bindParam(':branch_id', $branch_id, PDO::PARAM_INT);
             $stmt_booked->bindParam(':start_date', $start_date, PDO::PARAM_STR);
@@ -106,13 +127,20 @@ switch ($action) {
                 $booked_slots[$row['date']][$row['time_slot']] = (int)$row['booked_count'];
             }
 
-            // D. Fetch Holidays
-            $sql_holidays = "SELECT holiday_date FROM holidays WHERE holiday_date BETWEEN :start_date AND :end_date";
-            $stmt_holidays = $pdo->prepare($sql_holidays);
-            $stmt_holidays->bindParam(':start_date', $start_date, PDO::PARAM_STR);
-            $stmt_holidays->bindParam(':end_date', $end_date, PDO::PARAM_STR);
-            $stmt_holidays->execute();
-            $holidays = array_column($stmt_holidays->fetchAll(PDO::FETCH_ASSOC), 'holiday_date');
+            // D. Fetch Holidays (safely handle missing holidays table)
+            error_log("DEBUG: Checking for holidays");
+            $holidays = [];
+            try {
+                $sql_holidays = "SELECT holiday_date FROM holidays WHERE holiday_date BETWEEN :start_date AND :end_date";
+                $stmt_holidays = $pdo->prepare($sql_holidays);
+                $stmt_holidays->bindParam(':start_date', $start_date, PDO::PARAM_STR);
+                $stmt_holidays->bindParam(':end_date', $end_date, PDO::PARAM_STR);
+                $stmt_holidays->execute();
+                $holidays = array_column($stmt_holidays->fetchAll(PDO::FETCH_ASSOC), 'holiday_date');
+            } catch (\PDOException $e) {
+                // If holidays table doesn't exist, just continue with empty holidays array
+                error_log("Notice: Holidays table may not exist: " . $e->getMessage());
+            }
             
             // E. Calculate Daily Availability (Q4 logic)
             $availability_data = [];
@@ -161,8 +189,16 @@ switch ($action) {
             ]);
 
         } catch (\PDOException $e) {
+            // Log full error server-side
             error_log("Branch info fetch failed: " . $e->getMessage());
-            echo json_encode(['success' => false, 'error' => 'Database query failed to fetch branch info.']);
+
+            // Return a helpful error message for debugging (remove 'debug' in production)
+            $clientError = 'Database query failed to fetch branch info.';
+            echo json_encode([
+                'success' => false,
+                'error' => $clientError,
+                'debug' => $e->getMessage()
+            ]);
         }
         break;
 
@@ -181,10 +217,20 @@ switch ($action) {
 
     case 'submitAppointment':
         // 5. Submit Appointment (Merged from submit_appointment.php logic)
-        $data_raw = json_decode(file_get_contents('php://input'), true);
+        error_log("DEBUG: Starting appointment submission");
+        $raw_input = file_get_contents('php://input');
+        error_log("DEBUG: Raw input: " . $raw_input);
+        $data_raw = json_decode($raw_input, true);
+        
+        if (json_last_error() !== JSON_ERROR_NONE) {
+            error_log("JSON decode error: " . json_last_error_msg());
+            http_response_code(400);
+            echo json_encode(['success' => false, 'error' => 'Invalid JSON data received']);
+            exit;
+        }
         
         $data = [
-            'branch_id'      => sanitize_input($data_raw['branch_id'] ?? null),
+            'branch_id'      => (int)sanitize_input($data_raw['branch_id'] ?? 0),
             'date'           => sanitize_input($data_raw['date'] ?? null),
             'time_slot'      => sanitize_input($data_raw['time_slot'] ?? null),
             'first_name'     => sanitize_input($data_raw['firstName'] ?? null),
@@ -194,8 +240,10 @@ switch ($action) {
             'contact_number' => sanitize_input($data_raw['contact'] ?? null),
             'gender'         => sanitize_input($data_raw['gender'] ?? null),
             'volume'         => (float)sanitize_input($data_raw['volume'] ?? 0),
-            'farmer_type_id' => sanitize_input($data_raw['farmer_type_id'] ?? null), 
+            'farmer_type_id' => (int)sanitize_input($data_raw['farmer_type_id'] ?? 0), 
         ];
+        
+        error_log("DEBUG: Processed data: " . json_encode($data));
 
         if (!$data['branch_id'] || !$data['date'] || !$data['first_name'] || !$data['last_name'] || $data['volume'] <= 0) {
             http_response_code(400);
@@ -208,14 +256,28 @@ switch ($action) {
         try {
             $pdo->beginTransaction();
 
+            error_log("DEBUG: Starting appointment insert");
+            // Get region_id from branch (required by appointments table)
+            $stmt_region = $pdo->prepare("SELECT region_id FROM branch WHERE branch_id = ?");
+            $stmt_region->execute([$data['branch_id']]);
+            $region_id = $stmt_region->fetchColumn();
+            
+            if (!$region_id) {
+                throw new \PDOException("Invalid branch_id or region not found");
+            }
+
             // Insert into appointments table
             $sql = "INSERT INTO appointments 
-                    (branch_id, date, time_slot, first_name, middle_name, last_name, email, contact_number, gender, volume, farmer_type_id, status, reference_number) 
-                    VALUES (:branch_id, :date, :time_slot, :first_name, :middle_name, :last_name, :email, :contact_number, :gender, :volume, :farmer_type_id, 'pending', :reference_number)";
+                    (branch_id, region_id, date, time_slot, first_name, middle_name, last_name, 
+                     email, contact_number, gender, volume, farmer_type_id, status, reference_number) 
+                    VALUES 
+                    (:branch_id, :region_id, :date, :time_slot, :first_name, :middle_name, :last_name,
+                     :email, :contact_number, :gender, :volume, :farmer_type_id, 'pending', :reference_number)";
             
             $stmt = $pdo->prepare($sql);
-            $stmt->execute([
+            $params = [
                 ':branch_id' => $data['branch_id'],
+                ':region_id' => $region_id,
                 ':date' => $data['date'],
                 ':time_slot' => $data['time_slot'],
                 ':first_name' => $data['first_name'],
@@ -227,7 +289,9 @@ switch ($action) {
                 ':volume' => $data['volume'],
                 ':farmer_type_id' => $data['farmer_type_id'],
                 ':reference_number' => $reference_number
-            ]);
+            ];
+            error_log("DEBUG: SQL params: " . json_encode($params));
+            $stmt->execute($params);
 
             // Update inventory (Crucial for Q3 capacity)
             $update_inventory_sql = "
@@ -250,7 +314,22 @@ switch ($action) {
             }
             error_log("Appointment Insert Error: " . $e->getMessage());
             http_response_code(500);
-            echo json_encode(['success' => false, 'error' => 'Failed to book appointment due to server error.']);
+            echo json_encode([
+                'success' => false, 
+                'error' => 'Failed to book appointment due to server error.',
+                'debug' => $e->getMessage()
+            ]);
+        } catch (\Exception $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            error_log("General Error in appointment submission: " . $e->getMessage());
+            http_response_code(500);
+            echo json_encode([
+                'success' => false,
+                'error' => 'An unexpected error occurred.',
+                'debug' => $e->getMessage()
+            ]);
         }
         break;
 
