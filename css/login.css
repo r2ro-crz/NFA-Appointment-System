@@ -15,7 +15,6 @@
 body {
     font-family: 'Arial', sans-serif;
     line-height: 1.6;
-    color: var(--nfa-dark);
 }
 
 /* =========================================
@@ -26,17 +25,58 @@ body {
     justify-content: center;
     align-items: center;
     min-height: 100vh;
-    background-color: var(--nfa-green); /* NFA Green Background */
+    position: relative;
+    overflow: hidden;
+}
+
+.landing-body .bg-video {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    z-index: 0;
+}
+
+.landing-body::before {
+    /* dark overlay for contrast over the video */
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: rgba(0, 0, 0, 0.5);
+    z-index: 1;
 }
 .landing-container {
-    background: white;
+    background: rgba(255, 255, 255, 0.95);
     padding: 40px;
     border-radius: 8px;
     box-shadow: 0 8px 20px rgba(0, 0, 0, 0.3);
     width: 100%;
     max-width: 500px;
     text-align: center;
+    position: relative;
+    z-index: 2;
 }
+
+.landing-container::before {
+    content: '';
+    position: absolute;
+    top: 40px;
+    left: 40px;
+    right: 40px;
+    bottom: 40px;
+    background-image: url('../img/nfa-logo.png');
+    background-size: contain;
+    background-position: center;
+    background-repeat: no-repeat;
+    opacity: 0.1;
+    z-index: -1;
+}
+
 .landing-container h1 {
     color: var(--nfa-green);
     font-size: 2.2em;
@@ -90,23 +130,63 @@ body {
    B. STAFF LOGIN PAGE STYLES (Used by login.php)
 ========================================= */
 .login-body {
-    /* Uses the same background as landing-body */
     display: flex;
     justify-content: center;
     align-items: center;
     min-height: 100vh;
-    background-color: var(--nfa-green);
+    position: relative;
+    overflow: hidden;
+}
+
+.login-body .bg-video {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    z-index: 0;
+}
+
+.login-body::before {
+    /* dark overlay for contrast over the video */
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: rgba(0, 0, 0, 0.5);
+    z-index: 1;
 }
 .login-container {
     /* Uses the same container styles as landing-container */
-    background: white;
+    background: rgba(255, 255, 255, 0.95);
     padding: 40px;
     border-radius: 8px;
     box-shadow: 0 8px 20px rgba(0, 0, 0, 0.3);
     width: 100%;
     max-width: 400px;
     text-align: center;
+    position: relative;
+    z-index: 2;
 }
+
+.login-container::before {
+    content: '';
+    position: absolute;
+    top: 40px;
+    left: 40px;
+    right: 40px;
+    bottom: 40px;
+    background-image: url('../img/nfa-logo.png');
+    background-size: contain;
+    background-position: center;
+    background-repeat: no-repeat;
+    opacity: 0.1;
+    z-index: -1;
+}
+
 .login-container p {
     margin-bottom: 20px;
     color: #666;

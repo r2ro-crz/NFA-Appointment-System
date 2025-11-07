@@ -11,9 +11,13 @@ if (isset($_GET['error']) && $_GET['error'] == 1) {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>NFA Staff Login</title>
+    <link rel="icon" href="img/nfa-logo.png" type="image/png"/>
     <link rel="stylesheet" href="css/login.css">
 </head>
 <body class="login-body">
+    <video class="bg-video" autoplay muted loop playsinline>
+        <source src="img/intro.mp4" type="video/mp4">
+    </video>
     <div class="login-container">
         <h1>NFA Staff Access</h1>
         <p>Admin and Processor Operator Sign-In</p>
