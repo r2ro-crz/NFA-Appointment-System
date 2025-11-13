@@ -177,7 +177,7 @@
 
     <footer class="footer">
         <div class="container">
-            <p>&copy; 2024 National Food Authority. All rights reserved.</p>
+            <p>&copy; 2025 National Food Authority. All rights reserved.</p>
         </div>
     </footer>
 

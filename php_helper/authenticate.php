@@ -11,7 +11,8 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     
     // Simple validation check
     if (empty($username) || empty($password)) {
-        header("location: login.php?error=1"); 
+        // redirect back to top-level login.php (authenticate.php is inside php_helper)
+        header("Location: ../login.php?error=1"); 
         exit;
     }
 
@@ -41,7 +42,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                     if ($_SESSION["user_type"] == 'Admin') {
                         header("location: ../admin.html"); 
                     } else { // Processor/Operator
-                        header("location: operator.html");
+                        header("location: ../operator.html");
                     }
                     exit;
                 }
@@ -50,7 +51,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     }
     
     // Login failed (Invalid credentials)
-    header("location: login.php?error=1");
+    header("Location: ../login.php?error=1");
     exit;
 
 } else {

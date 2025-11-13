@@ -1,13 +1,10 @@
 <?php
-// Include the database connection file.
 require_once 'db_config.php'; 
 
 header('Content-Type: application/json');
 header('Access-Control-Allow-Origin: *');
 header('Access-Control-Allow-Methods: GET, POST');
 header('Access-Control-Allow-Headers: Content-Type');
-
-// --- Helper Functions ---
 
 function sanitize_input($data) {
     if (is_string($data)) {
@@ -42,14 +39,12 @@ switch ($action) {
 
     case 'getBranches':
         // 2. Get Branches filtered by Region
-        // FIX: Explicitly cast region_id to (int) to ensure proper matching against the integer column in the database.
         $region_id = (int)sanitize_input($_GET['region_id'] ?? 0); 
         if (!$region_id) {
             echo json_encode(['success' => true, 'data' => []]);
             break;
         }
         try {
-            // FIX APPLIED: Using the confirmed singular table name 'branch' from the DDL.
             $stmt = $pdo->prepare("SELECT branch_id, branch_name FROM branch WHERE region_id = ? ORDER BY branch_name");
             $stmt->execute([$region_id]);
             $branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -62,7 +57,6 @@ switch ($action) {
 
     case 'getBranchInfo':
         // 3. Consolidated fetch for Capacity, Slots, and Availability
-    // Ensure branch_id is an integer to avoid SQL type/format issues
     $branch_id = (int)sanitize_input($_GET['branch_id'] ?? 0);
     $start_date = sanitize_input($_GET['start_date'] ?? date('Y-m-01'));
     $end_date = sanitize_input($_GET['end_date'] ?? date('Y-m-t'));
@@ -112,7 +106,6 @@ switch ($action) {
             error_log("DEBUG: Using capacity: " . json_encode($default_capacity));
 
             // C. Fetch Booked Appointments (Q4/Q5)
-            // Quote `date` to avoid ambiguity with SQL DATE function/keyword
             $sql_booked = "SELECT `date`, time_slot, COUNT(appointment_id) as booked_count FROM appointments 
                            WHERE branch_id = :branch_id AND `date` BETWEEN :start_date AND :end_date 
                            AND status != 'Cancelled' GROUP BY `date`, time_slot";
@@ -205,7 +198,6 @@ switch ($action) {
     case 'getFarmerTypes':
         // 4. Get Farmer Types
         try {
-            // FIX: Changed table name to 'farmer_type' (singular, assuming consistency)
             $stmt = $pdo->query("SELECT farmer_type_id, type_name FROM farmer_type ORDER BY type_name");
             $types = $stmt->fetchAll(PDO::FETCH_ASSOC);
             echo json_encode(['success' => true, 'data' => $types]);

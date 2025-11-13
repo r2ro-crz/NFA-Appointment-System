@@ -16,14 +16,19 @@ if (isset($_GET['error']) && $_GET['error'] == 1) {
 </head>
 <body class="login-body">
     <video class="bg-video" autoplay muted loop playsinline>
-        <source src="img/intro.mp4" type="video/mp4">
+        <source src="img/nfa-intro.mp4" type="video/mp4">
     </video>
     <div class="login-container">
         <h1>NFA Staff Access</h1>
         <p>Admin and Processor Operator Sign-In</p>
         
         <?php if ($error_message): ?>
-            <div class="error"><?php echo nl2br(htmlspecialchars($error_message)); ?></div>
+            <div id="serverError" class="alert error" role="alert">
+                <span class="alert-icon">⚠️</span>
+                <div>
+                    <?php echo nl2br(htmlspecialchars($error_message)); ?>
+                </div>
+            </div>
         <?php endif; ?>
 
         <form action="php_helper/authenticate.php" method="POST">
