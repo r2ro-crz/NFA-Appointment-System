@@ -1,4 +1,4 @@
-// Main JavaScript file for NFA Farmer's Appointment System
+﻿// Main JavaScript file for NFA Farmer's Appointment System
 
 // Global state variables
 let currentDate = new Date();
@@ -11,7 +11,6 @@ let selectedBranchName = '';
 // The daily_slot_capacity will be determined by PHP response
 let branchCapacityInfo = { available_volume: 0, daily_slot_capacity: 0 }; 
 let dateAvailability = {}; // Object to store detailed availability from api.php
-let captchaText = '';
 
 // Path to the consolidated API file
 const API_URL = 'php_helper/api.php'; 
@@ -25,7 +24,6 @@ async function initializeApp() {
     setupEventListeners();
     await fetchRegions(); 
     await fetchFarmerTypes(); 
-    generateCaptcha(); 
     updateProgress(1);
 }
 
@@ -137,7 +135,17 @@ async function fetchBranchInfo(branchId) {
         dateAvailability = data.daily_availability; 
         
         updateCapacityDisplay();
-        updateCalendarDisplay();
+
+        // If warehouse cannot accept anymore, hide calendar and show a clear note
+        const capacityNoteEl = document.getElementById('capacityNote');
+        if (branchCapacityInfo.available_volume <= 0) {
+            if (capacityNoteEl) capacityNoteEl.textContent = `${selectedBranchName || 'This branch'}'s Warehouse cannot accept anymore bags.`;
+            hideCalendar();
+        } else {
+            if (capacityNoteEl) capacityNoteEl.innerHTML = '<strong>Note:</strong> The number above reflects the current available warehouse space.';
+            showCalendar();
+            updateCalendarDisplay();
+        }
     }
 }
 
@@ -163,7 +171,8 @@ function setupEventListeners() {
     document.getElementById('prevMonth').addEventListener('click', () => changeMonth(-1));
     document.getElementById('nextMonth').addEventListener('click', () => changeMonth(1));
     document.getElementById('farmerForm').addEventListener('submit', handleFormSubmission);
-    document.getElementById('refreshCaptcha').addEventListener('click', generateCaptcha);
+    const refreshBtn = document.getElementById('refreshCaptcha');
+    if (refreshBtn) refreshBtn.addEventListener('click', generateCaptcha);
 }
 
 function handleRegionChange() {
@@ -194,7 +203,6 @@ function handleBranchChange() {
     if (selectedBranchId) {
         fetchBranchInfo(selectedBranchId);
         showCapacityInfo();
-        showCalendar();
         updateProgress(1); 
     } else {
         hideCalendar();
@@ -304,6 +312,9 @@ function generateCalendarDays() {
     
     const today = new Date();
     today.setHours(0, 0, 0, 0);
+    // Earliest selectable date should be 1 day ahead (disable current date)
+    const minDate = new Date(today);
+    minDate.setDate(minDate.getDate() + 1);
     
     selectedDate = null;
     document.querySelectorAll('.time-slot.selected').forEach(slot => slot.classList.remove('selected'));
@@ -324,8 +335,8 @@ function generateCalendarDays() {
             dayElement.classList.add('other-month');
         }
         
-        // Disable past dates
-        if (cellDate < today) {
+        // Disable past dates and today (minDate)
+        if (cellDate < minDate) {
             dayElement.classList.add('disabled');
         }
         
@@ -463,27 +474,72 @@ function updateAppointmentSummary() {
 }
 
 function generateCaptcha() {
-    const words = ["Farmer", "Harvest", "Rice", "Grain", "NFA", "Schedule", "Portal", "Approve", "Commit"];
-    captchaText = words[Math.floor(Math.random() * words.length)];
-    document.getElementById('captchaQuestion').textContent = captchaText;
+    // No-op placeholder to keep compatibility with older code paths.
+    return;
 }
+
+/**
+ * Performs strong client-side validation on user input fields.
+ * @param {object} formData - The form data object.
+ * @returns {boolean} True if all validations pass, false otherwise.
+ */
+function validateFarmerForm(formData) {
+    // Regex patterns for strong validation
+    // Allows letters, spaces, hyphens, and apostrophes for names
+    const namePattern = /^[a-zA-Z\s\-']+$/; 
+    // Basic email pattern (better to check full RFC compliance server-side)
+    const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    // Philippine Mobile Number: starts with 09 or +639, followed by 9 digits (09XX-XXX-XXXX or +639XXXXXXXXX)
+    const contactPattern = /^(09|\+639)\d{9}$/; 
+    
+    // 1. Name Validation
+    if (!formData.firstName || !namePattern.test(formData.firstName)) {
+        alert('Please enter a valid First Name (letters, spaces, hyphens, and apostrophes only).');
+        document.getElementById('firstName').focus();
+        return false;
+    }
+    // Middle name is optional, but if present, validate it
+    if (formData.middleName && formData.middleName.trim() !== '' && !namePattern.test(formData.middleName)) {
+        alert('Please enter a valid Middle Name (letters, spaces, hyphens, and apostrophes only, or leave blank).');
+        document.getElementById('middleName').focus();
+        return false;
+    }
+    if (!formData.lastName || !namePattern.test(formData.lastName)) {
+        alert('Please enter a valid Last Name (letters, spaces, hyphens, and apostrophes only).');
+        document.getElementById('lastName').focus();
+        return false;
+    }
+
+    // 2. Email Validation
+    if (!formData.email || !emailPattern.test(formData.email)) {
+        alert('Please enter a valid Email Address (e.g., example@domain.com).');
+        document.getElementById('email').focus();
+        return false;
+    }
+
+    // 3. Contact Number Validation
+    // Remove common non-digit characters for a cleaner check if the user entered them
+    const cleanContact = formData.contact.replace(/[\s\-\(\)]/g, ''); 
+    if (!cleanContact || !contactPattern.test(cleanContact)) {
+        alert('Please enter a valid 11-digit Philippine Contact Number, starting with 09 or +639.');
+        document.getElementById('contact').focus();
+        return false;
+    }
+
+    return true; // All checks passed
+}
+
 
 async function handleFormSubmission(e) {
     e.preventDefault();
     const form = e.target;
     const submitBtn = form.querySelector('.submit-btn');
     
-    // 6. Validate captcha (case-insensitive)
-    const captchaInput = document.getElementById('captcha').value;
-    if (captchaInput.toLowerCase() !== captchaText.toLowerCase()) {
-        alert('Incorrect verification word. Please try again.');
-        generateCaptcha();
-        document.getElementById('captcha').value = '';
-        return;
-    }
-    
     // Collect form data
     const formData = {
+        // Personal Info
+        farmer_id: document.getElementById('farmerId').value,
+        suffix: document.getElementById('suffix').value,
         firstName: document.getElementById('firstName').value,
         middleName: document.getElementById('middleName').value,
         lastName: document.getElementById('lastName').value,
@@ -498,7 +554,21 @@ async function handleFormSubmission(e) {
         date: formatDate(selectedDate),
         time_slot: selectedTime
     };
+    // Validate reCAPTCHA
+    const recaptchaResponse = (typeof grecaptcha !== 'undefined') ? grecaptcha.getResponse() : null;
+    if (!recaptchaResponse) {
+        alert('Please complete the reCAPTCHA verification.');
+        return;
+    }
 
+    // Attach reCAPTCHA token
+    formData.g_recaptcha_response = recaptchaResponse;
+
+    // --- NEW VALIDATION STEP ---
+    if (!validateFarmerForm(formData)) {
+        return; // Stop submission if client-side validation fails
+    }
+    
     // Volume validation against available capacity (Q3 logic)
     if (formData.volume > branchCapacityInfo.available_volume) {
         alert(`The volume (${formatNumber(formData.volume)} kg) exceeds the available capacity of ${formatNumber(branchCapacityInfo.available_volume)} kg. Please reduce the volume.`);
@@ -524,13 +594,10 @@ async function handleFormSubmission(e) {
     if (result && result.success) {
         document.getElementById('referenceNumber').textContent = result.referenceNumber;
         document.getElementById('successModal').style.display = 'flex';
-        
-        // Re-fetch branch info to update booked slots/capacity after successful booking
-        if (selectedBranchId) {
-            await fetchBranchInfo(selectedBranchId);
-        }
-        
+
+        // Do not update branch capacity here: appointments are pending until processor approval.
         resetForm();
+        try { if (typeof grecaptcha !== 'undefined' && grecaptcha.reset) grecaptcha.reset(); } catch(e) { /* ignore */ }
     } // Error is handled by fetchApi
 }
 
@@ -570,11 +637,14 @@ function resetForm() {
     hideCalendar();
     hideCapacityInfo();
     hideAppointmentForm();
-    generateCaptcha();
     updateProgress(0); 
     
     document.querySelectorAll('.calendar-day.selected').forEach(day => day.classList.remove('selected'));
     document.querySelectorAll('.time-slot.selected').forEach(slot => slot.classList.remove('selected'));
+
+    if (typeof grecaptcha !== 'undefined' && grecaptcha.reset) {
+        grecaptcha.reset(); 
+    }
 }
 
 function closeModal() {

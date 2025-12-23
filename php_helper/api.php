@@ -228,6 +228,9 @@ switch ($action) {
             'first_name'     => sanitize_input($data_raw['firstName'] ?? null),
             'middle_name'    => sanitize_input($data_raw['middleName'] ?? null),
             'last_name'      => sanitize_input($data_raw['lastName'] ?? null),
+            'farmer_id'      => sanitize_input($data_raw['farmer_id'] ?? null),
+            'suffix'         => sanitize_input($data_raw['suffix'] ?? null),
+            'g_recaptcha_response' => sanitize_input($data_raw['g_recaptcha_response'] ?? $data_raw['recaptcha'] ?? null),
             'email'          => sanitize_input($data_raw['email'] ?? null),
             'contact_number' => sanitize_input($data_raw['contact'] ?? null),
             'gender'         => sanitize_input($data_raw['gender'] ?? null),
@@ -237,9 +240,49 @@ switch ($action) {
         
         error_log("DEBUG: Processed data: " . json_encode($data));
 
-        if (!$data['branch_id'] || !$data['date'] || !$data['first_name'] || !$data['last_name'] || $data['volume'] <= 0) {
+        if (!$data['branch_id'] || !$data['date'] || !$data['first_name'] || !$data['last_name'] || !$data['farmer_id'] || $data['volume'] <= 0) {
             http_response_code(400);
             echo json_encode(['success' => false, 'error' => 'Missing required appointment data or invalid volume.']);
+            exit;
+        }
+
+        // Verify reCAPTCHA token is present
+        if (empty($data['g_recaptcha_response'])) {
+            http_response_code(400);
+            echo json_encode(['success' => false, 'error' => 'Missing reCAPTCHA token.']);
+            exit;
+        }
+
+        // Verify reCAPTCHA with Google's siteverify API (v2)
+        $recaptcha_secret = '6LcdCQwsAAAAAJ3xlp-YTJp_Rgy_EC77jQ02ZnU9'; // provided secret
+        $recaptcha_response = $data['g_recaptcha_response'];
+
+        $verify_url = 'https://www.google.com/recaptcha/api/siteverify';
+        $ch = curl_init($verify_url);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 5);
+        curl_setopt($ch, CURLOPT_POST, true);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, http_build_query([
+            'secret' => $recaptcha_secret,
+            'response' => $recaptcha_response,
+            'remoteip' => $_SERVER['REMOTE_ADDR'] ?? ''
+        ]));
+        $verify_resp = curl_exec($ch);
+        $curl_err = curl_error($ch);
+        curl_close($ch);
+
+        if ($verify_resp === false || !$verify_resp) {
+            error_log('reCAPTCHA verify HTTP error: ' . $curl_err);
+            http_response_code(500);
+            echo json_encode(['success' => false, 'error' => 'Failed to verify reCAPTCHA.']);
+            exit;
+        }
+
+        $verify_data = json_decode($verify_resp, true);
+        if (!isset($verify_data['success']) || $verify_data['success'] !== true) {
+            error_log('reCAPTCHA verification failed: ' . $verify_resp);
+            http_response_code(400);
+            echo json_encode(['success' => false, 'error' => 'reCAPTCHA verification failed.']);
             exit;
         }
         
@@ -258,14 +301,14 @@ switch ($action) {
                 throw new \PDOException("Invalid branch_id or region not found");
             }
 
-            // Insert into appointments table
+            // Insert into appointments table (including farmer_id and suffix)
             $sql = "INSERT INTO appointments 
                     (branch_id, region_id, date, time_slot, first_name, middle_name, last_name, 
-                     email, contact_number, gender, volume, farmer_type_id, status, reference_number) 
+                     farmer_id, suffix, email, contact_number, gender, volume, farmer_type_id, status, reference_number) 
                     VALUES 
                     (:branch_id, :region_id, :date, :time_slot, :first_name, :middle_name, :last_name,
-                     :email, :contact_number, :gender, :volume, :farmer_type_id, 'pending', :reference_number)";
-            
+                     :farmer_id, :suffix, :email, :contact_number, :gender, :volume, :farmer_type_id, 'pending', :reference_number)";
+
             $stmt = $pdo->prepare($sql);
             $params = [
                 ':branch_id' => $data['branch_id'],
@@ -275,6 +318,8 @@ switch ($action) {
                 ':first_name' => $data['first_name'],
                 ':middle_name' => $data['middle_name'],
                 ':last_name' => $data['last_name'],
+                ':farmer_id' => $data['farmer_id'],
+                ':suffix' => $data['suffix'],
                 ':email' => $data['email'],
                 ':contact_number' => $data['contact_number'],
                 ':gender' => $data['gender'],
@@ -285,16 +330,9 @@ switch ($action) {
             error_log("DEBUG: SQL params: " . json_encode($params));
             $stmt->execute($params);
 
-            // Update inventory (Crucial for Q3 capacity)
-            $update_inventory_sql = "
-                UPDATE volume_capacity 
-                SET inventory = inventory + :volume 
-                WHERE branch_id = :branch_id
-            ";
-            $pdo->prepare($update_inventory_sql)->execute([
-                ':volume' => $data['volume'], 
-                ':branch_id' => $data['branch_id']
-            ]);
+            // NOTE: Inventory update is deferred until processor approval.
+            // Do NOT modify `volume_capacity.inventory` here. The appointment is created with
+            // status = 'pending' and the processor will mark it 'done' and update inventory.
             
             $pdo->commit();
 
