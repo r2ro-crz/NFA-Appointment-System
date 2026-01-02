@@ -194,7 +194,7 @@ switch ($action) {
             ]);
         }
         break;
-
+        
     case 'getFarmerTypes':
         // 4. Get Farmer Types
         try {
@@ -363,9 +363,23 @@ switch ($action) {
         }
         break;
 
-    default:
-        http_response_code(404);
-        echo json_encode(['success' => false, 'error' => 'Invalid API action.']);
-        break;
+    // --- Notification Read/Unread Handler (POST) ---
+    case 'updateNotification':
+    $data = json_decode(file_get_contents('php://input'), true);
+    $appointment_id = (int)($data['appointment_id'] ?? 0);
+    $is_read = isset($data['is_read']) ? (int)$data['is_read'] : 0; // Capture the status from JS
+
+    if ($appointment_id) {
+        try {
+            $stmt = $pdo->prepare("UPDATE appointments SET is_read = ? WHERE appointment_id = ?");
+            $stmt->execute([$is_read, $appointment_id]);
+            echo json_encode(['success' => true]);
+        } catch (PDOException $e) {
+            echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+        }
+    } else {
+        echo json_encode(['success' => false, 'error' => 'Invalid ID']);
+    }
+    break;
 }
 ?>

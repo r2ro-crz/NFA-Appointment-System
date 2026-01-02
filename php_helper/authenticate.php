@@ -42,7 +42,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                     if ($_SESSION["user_type"] == 'Admin') {
                         header("location: ../admin.html"); 
                     } else { // Processor/Operator
-                        header("location: ../operator.html");
+                        header("location: ../processor_dashboard.php");
                     }
                     exit;
                 }
