@@ -1,27 +1,43 @@
+// Enhanced Login JavaScript
 document.addEventListener('DOMContentLoaded', () => {
+    // --- DOM Elements ---
+    const loginForm = document.getElementById('loginForm');
+    const usernameInput = document.getElementById('username');
+    const passwordInput = document.getElementById('password');
+    const togglePasswordBtn = document.getElementById('togglePassword');
+    const submitBtn = document.getElementById('submitBtn');
+    const loadingOverlay = document.getElementById('loadingOverlay');
+    const lockoutMessage = document.getElementById('lockoutMessage');
+    const lockoutTimer = document.getElementById('countdown');
+    
     // --- Login attempt throttling settings ---
     const ATTEMPT_KEY = 'nfa_login_attempts';
     const LOCK_KEY = 'nfa_login_lock_until';
-    const LOCK_THRESHOLD = 5; // attempts
-    const LOCK_DURATION_MS = 30 * 1000; // 30 seconds
+    const LOCK_THRESHOLD = 5;
+    const LOCK_DURATION_MS = 30 * 1000;
     let lockInterval = null;
-
+    
+    // --- Utility Functions ---
     function safeLocalStorageGet(key) {
         try { return localStorage.getItem(key); } catch (e) { return null; }
     }
+    
     function safeLocalStorageSet(key, val) {
         try { localStorage.setItem(key, val); } catch (e) { /* ignore */ }
     }
+    
     function safeLocalStorageRemove(key) {
         try { localStorage.removeItem(key); } catch (e) { /* ignore */ }
     }
-
+    
     function getAttempts() {
         return parseInt(safeLocalStorageGet(ATTEMPT_KEY) || '0', 10);
     }
+    
     function setAttempts(n) {
         safeLocalStorageSet(ATTEMPT_KEY, String(n));
     }
+    
     function incAttempts() {
         const a = getAttempts() + 1;
         setAttempts(a);
@@ -30,172 +46,260 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         return a;
     }
+    
     function clearAttempts() {
         setAttempts(0);
     }
+    
     function setLockout(untilMs) {
         safeLocalStorageSet(LOCK_KEY, String(untilMs));
         applyLockoutState();
     }
+    
     function clearLockout() {
         safeLocalStorageRemove(LOCK_KEY);
         clearAttempts();
         applyLockoutState();
     }
+    
     function getLockUntil() {
         return parseInt(safeLocalStorageGet(LOCK_KEY) || '0', 10);
     }
+    
     function isLocked() {
         const until = getLockUntil();
         return until && Date.now() < until;
     }
-
-    // Create lockout message element (hidden by default) using CSS classes
-    const loginContainer = document.querySelector('.login-container');
-    let lockoutMessage = document.getElementById('lockoutMessage');
-    if (!lockoutMessage && loginContainer) {
-        lockoutMessage = document.createElement('div');
-        lockoutMessage.id = 'lockoutMessage';
-        lockoutMessage.className = 'alert lockout';
-        lockoutMessage.style.display = 'none';
-        // include an icon span and inner text container for consistent layout
-        const icon = document.createElement('span');
-        icon.className = 'alert-icon';
-        icon.textContent = '⏳';
-        const inner = document.createElement('div');
-        inner.className = 'lockout-text';
-        lockoutMessage.appendChild(icon);
-        lockoutMessage.appendChild(inner);
-        loginContainer.appendChild(lockoutMessage);
-    }
-
+    
+    // --- Lockout State Management ---
     function applyLockoutState() {
-        const usernameEl = document.getElementById('username');
-        const passwordEl = document.getElementById('password');
-        const submitBtn = document.querySelector('.login-button');
-
-        if (isLocked()) {
-            const until = getLockUntil();
-            const remainingMs = Math.max(0, until - Date.now());
-            // disable fields
-            if (usernameEl) usernameEl.disabled = true;
-            if (passwordEl) passwordEl.disabled = true;
-            if (submitBtn) {
-                submitBtn.disabled = true;
-                submitBtn.textContent = 'Locked';
-            }
-            // show message with countdown
-            const seconds = Math.ceil(remainingMs / 1000);
-            if (lockoutMessage && lockoutMessage.querySelector('.lockout-text')) {
-                lockoutMessage.querySelector('.lockout-text').textContent = `Too many failed attempts. Please wait ${seconds} second${seconds !== 1 ? 's' : ''} before trying again.`;
-            }
-            if (lockoutMessage) lockoutMessage.style.display = 'flex';
-
-            // start or refresh interval
+        const isAccountLocked = isLocked();
+        
+        // Disable/enable form inputs
+        usernameInput.disabled = isAccountLocked;
+        passwordInput.disabled = isAccountLocked;
+        
+        if (isAccountLocked) {
+            // Show lockout message
+            lockoutMessage.style.display = 'flex';
+            
+            // Update button
+            submitBtn.disabled = true;
+            submitBtn.innerHTML = '<i class="fas fa-lock"></i> Account Locked';
+            
+            // Start countdown timer
+            updateLockoutTimer();
             if (lockInterval) clearInterval(lockInterval);
-            lockInterval = setInterval(() => {
-                const rem = Math.max(0, getLockUntil() - Date.now());
-                if (rem <= 0) {
-                    clearInterval(lockInterval);
-                    lockInterval = null;
-                    clearLockout();
-                } else {
-                    const s = Math.ceil(rem / 1000);
-                    if (lockoutMessage && lockoutMessage.querySelector('.lockout-text')) {
-                        lockoutMessage.querySelector('.lockout-text').textContent = `Too many failed attempts. Please wait ${s} second${s !== 1 ? 's' : ''} before trying again.`;
-                    }
-                }
-            }, 250);
+            lockInterval = setInterval(updateLockoutTimer, 1000);
         } else {
-            // enable fields
-            if (usernameEl) usernameEl.disabled = false;
-            if (passwordEl) passwordEl.disabled = false;
-            const submitBtn = document.querySelector('.login-button');
-            if (submitBtn) {
-                submitBtn.disabled = false;
-                submitBtn.textContent = 'Log In';
-            }
-            if (lockoutMessage) lockoutMessage.style.display = 'none';
+            // Hide lockout message
+            lockoutMessage.style.display = 'none';
+            
+            // Enable button
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = '<span class="button-text">Log In</span><i class="fas fa-arrow-right button-icon"></i>';
+            
+            // Clear interval
             if (lockInterval) {
                 clearInterval(lockInterval);
                 lockInterval = null;
             }
         }
     }
-
-    // If page was loaded with an error query param (server rejected login), increment attempts
+    
+    function updateLockoutTimer() {
+        const until = getLockUntil();
+        const remainingMs = Math.max(0, until - Date.now());
+        
+        if (remainingMs <= 0) {
+            clearLockout();
+            return;
+        }
+        
+        const seconds = Math.ceil(remainingMs / 1000);
+        lockoutTimer.textContent = seconds;
+        
+        // Update message text
+        const timerText = lockoutMessage.querySelector('.alert-content p');
+        timerText.innerHTML = `Please wait <span id="countdown">${seconds}</span> seconds before trying again.`;
+    }
+    
+    // --- Form Validation ---
+    function validateForm() {
+        let isValid = true;
+        const username = usernameInput.value.trim();
+        const password = passwordInput.value;
+        
+        // Clear previous errors
+        document.querySelectorAll('.input-feedback').forEach(el => el.textContent = '');
+        document.querySelectorAll('.input-wrapper input').forEach(input => {
+            input.style.borderColor = '#e1e5e9';
+        });
+        
+        // Username validation (only required for login)
+        if (!username) {
+            showInputError(usernameInput, 'Username is required');
+            isValid = false;
+        }
+        
+        // Password validation
+        if (!password) {
+            showInputError(passwordInput, 'Password is required');
+            isValid = false;
+        }
+        
+        return isValid;
+    }
+    
+    function showInputError(input, message) {
+        input.style.borderColor = 'var(--full-red)';
+        const feedback = input.parentElement.querySelector('.input-feedback');
+        if (feedback) {
+            feedback.textContent = message;
+            feedback.style.color = 'var(--full-red)';
+        }
+    }
+    
+    // --- Password Visibility Toggle ---
+    if (togglePasswordBtn) {
+        togglePasswordBtn.addEventListener('click', function() {
+            const type = passwordInput.getAttribute('type') === 'password' ? 'text' : 'password';
+            passwordInput.setAttribute('type', type);
+            
+            // Update icon
+            const icon = this.querySelector('i');
+            icon.className = type === 'password' ? 'fas fa-eye' : 'fas fa-eye-slash';
+            
+            // Accessibility
+            this.setAttribute('aria-label', type === 'password' ? 'Show password' : 'Hide password');
+        });
+    }
+    
+    // --- Form Submission ---
+    if (loginForm) {
+        loginForm.addEventListener('submit', function(e) {
+            e.preventDefault();
+            
+            // Check if account is locked
+            if (isLocked()) {
+                applyLockoutState();
+                return;
+            }
+            
+            // Validate form
+            if (!validateForm()) {
+                return;
+            }
+            
+            // Show loading overlay
+            loadingOverlay.classList.add('active');
+            
+            // Update button state
+            submitBtn.disabled = true;
+            submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Authenticating...';
+            
+            // Simulate network delay for demo purposes
+            setTimeout(() => {
+                // In a real application, this would be handled by the PHP backend
+                // For now, we'll just submit the form
+                loginForm.submit();
+                
+                // Increment attempts for demonstration (in real app, this would be based on server response)
+                const urlParams = new URLSearchParams(window.location.search);
+                if (urlParams.get('error') === '1') {
+                    incAttempts();
+                }
+            }, 1500);
+        });
+    }
+    
+    // --- Auto-hide transient error messages (but keep lockout visible) ---
+    const errorMessages = document.querySelectorAll('.alert.error');
+    errorMessages.forEach(message => {
+        setTimeout(() => {
+            message.style.transition = 'opacity 0.8s ease-out, transform 0.8s ease-out';
+            message.style.opacity = '0';
+            message.style.transform = 'translateX(-20px)';
+            
+            setTimeout(() => {
+                if (message.parentNode) {
+                    message.remove();
+                }
+            }, 800);
+        }, 8000); // Hide after 8 seconds
+    });
+    
+    // --- Apply lockout state on load ---
+    applyLockoutState();
+    
+    // --- Increment attempts if coming from error page ---
     try {
         const urlParams = new URLSearchParams(window.location.search);
         if (urlParams.get('error') === '1') {
             const attempts = incAttempts();
-            // show small client-side note (we keep server message too)
-            console.debug('Login failed. Attempts:', attempts);
+            console.log(`Login failed. Total attempts: ${attempts}`);
         }
-    } catch (e) { /* ignore URL parsing errors */ }
-
-    // Apply lockout state on load
-    applyLockoutState();
-    const loginForm = document.querySelector('.login-container form');
-    const passwordInput = document.getElementById('password');
-    const togglePassword = document.getElementById('togglePassword');
-    // server error element uses .alert.error now
-    const errorMessage = document.querySelector('.login-container .alert.error');
-
-    // 1. Password Visibility Toggle
-    if (togglePassword) {
-        togglePassword.addEventListener('click', function (e) {
-            // Toggle the type attribute
-            const type = passwordInput.getAttribute('type') === 'password' ? 'text' : 'password';
-            passwordInput.setAttribute('type', type);
-            
-            // Toggle the eye icon for better feedback
-            this.textContent = type === 'password' ? '👁️' : '🔒';
+    } catch (e) {
+        console.error('Error parsing URL parameters:', e);
+    }
+    
+    // --- Input field animations ---
+    const inputs = document.querySelectorAll('input');
+    inputs.forEach(input => {
+        // Add focus animation
+        input.addEventListener('focus', function() {
+            this.parentElement.style.transform = 'scale(1.02)';
+        });
+        
+        input.addEventListener('blur', function() {
+            this.parentElement.style.transform = 'scale(1)';
+        });
+        
+        // Real-time validation
+        input.addEventListener('input', function() {
+            if (this.value.trim() !== '') {
+                this.style.borderColor = 'var(--nfa-green)';
+            } else {
+                this.style.borderColor = '#e1e5e9';
+            }
+        });
+    });
+    
+    // --- Remember me functionality ---
+    const rememberCheckbox = document.getElementById('remember');
+    if (rememberCheckbox) {
+        // Load saved username if remember me was checked previously
+        const savedUsername = safeLocalStorageGet('remembered_username');
+        if (savedUsername) {
+            usernameInput.value = savedUsername;
+            rememberCheckbox.checked = true;
+        }
+        
+        // Save username when checkbox is checked
+        rememberCheckbox.addEventListener('change', function() {
+            if (this.checked && usernameInput.value.trim()) {
+                safeLocalStorageSet('remembered_username', usernameInput.value.trim());
+            } else {
+                safeLocalStorageRemove('remembered_username');
+            }
         });
     }
-
-    // 2. Client-side Form Validation and Visual Feedback
-    if (loginForm) {
-        loginForm.addEventListener('submit', function (e) {
-            // Prevent submission while locked
-            if (typeof isLocked === 'function' && isLocked()) {
-                e.preventDefault();
-                applyLockoutState();
-                return;
+    
+    // --- Accessibility improvements ---
+    document.addEventListener('keydown', function(e) {
+        // Submit form with Ctrl+Enter
+        if (e.ctrlKey && e.key === 'Enter') {
+            if (loginForm && !submitBtn.disabled) {
+                loginForm.requestSubmit();
             }
-
-            const username = document.getElementById('username').value.trim();
-            const password = document.getElementById('password').value;
-
-            // Simple client-side check
-            if (username === '' || password === '') {
-                e.preventDefault(); // Stop form submission
-                alert("Please enter both a username and a password.");
-                // Add temporary styling to highlight empty fields
-                if (username === '') document.getElementById('username').style.borderColor = 'red';
-                if (password === '') document.getElementById('password').style.borderColor = 'red';
-                return;
+        }
+        
+        // Toggle password with Alt+P
+        if (e.altKey && e.key === 'p') {
+            e.preventDefault();
+            if (togglePasswordBtn) {
+                togglePasswordBtn.click();
             }
-            
-            // Reset border colors on valid submission attempt
-            document.getElementById('username').style.borderColor = '#ddd';
-            document.getElementById('password').style.borderColor = '#ddd';
-
-            // Optional: Provide a "loading" state on the button
-            const submitBtn = document.querySelector('.login-button');
-            submitBtn.textContent = 'Verifying...';
-            submitBtn.disabled = true;
-        });
-    }
-
-    // 3. Auto-hide PHP error message after a few seconds
-    if (errorMessage) {
-        setTimeout(() => {
-            errorMessage.style.transition = 'opacity 1s ease-out';
-            errorMessage.style.opacity = 0;
-            // Remove the element from the DOM after the transition finishes
-            setTimeout(() => {
-                errorMessage.remove();
-            }, 1000); 
-        }, 5000); // Wait 5 seconds before starting to fade
-    }
+        }
+    });
 });

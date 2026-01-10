@@ -1,5 +1,9 @@
 <?php
+require_once __DIR__ . '/../vendor/autoload.php';
 require_once 'db_config.php'; 
+
+use PHPMailer\PHPMailer\PHPMailer;
+use PHPMailer\PHPMailer\Exception;
 
 header('Content-Type: application/json');
 header('Access-Control-Allow-Origin: *');
@@ -86,8 +90,8 @@ switch ($action) {
 
             // B. Fetch Default Slot Capacity (Used by Q4/Q5 logic)
             error_log("DEBUG: Fetching slot capacity");
-            // First try with date IS NULL for defaults
-            $stmt_default_cap = $pdo->prepare("SELECT capacity_am, capacity_pm FROM branch_slot_capacity WHERE branch_id = :branch_id AND `date` IS NULL");
+            // First try with date IS NULL or empty string for defaults (SQL dump uses '' for default rows)
+            $stmt_default_cap = $pdo->prepare("SELECT capacity_am, capacity_pm FROM branch_slot_capacity WHERE branch_id = :branch_id AND (`date` IS NULL OR `date` = '')");
             $stmt_default_cap->bindParam(':branch_id', $branch_id, PDO::PARAM_INT);
             $stmt_default_cap->execute();
             $default_capacity = $stmt_default_cap->fetch(PDO::FETCH_ASSOC);
@@ -108,7 +112,7 @@ switch ($action) {
             // C. Fetch Booked Appointments (Q4/Q5)
             $sql_booked = "SELECT `date`, time_slot, COUNT(appointment_id) as booked_count FROM appointments 
                            WHERE branch_id = :branch_id AND `date` BETWEEN :start_date AND :end_date 
-                           AND status != 'Cancelled' GROUP BY `date`, time_slot";
+                           AND status != 'cancelled' GROUP BY `date`, time_slot";
             $stmt_booked = $pdo->prepare($sql_booked);
             $stmt_booked->bindParam(':branch_id', $branch_id, PDO::PARAM_INT);
             $stmt_booked->bindParam(':start_date', $start_date, PDO::PARAM_STR);
@@ -329,12 +333,54 @@ switch ($action) {
             ];
             error_log("DEBUG: SQL params: " . json_encode($params));
             $stmt->execute($params);
-
-            // NOTE: Inventory update is deferred until processor approval.
-            // Do NOT modify `volume_capacity.inventory` here. The appointment is created with
-            // status = 'pending' and the processor will mark it 'done' and update inventory.
             
             $pdo->commit();
+
+            // --- EMAIL NOTIFICATION LOGIC ---
+            try {
+                // 1. Fetch Processor email for this specific branch
+                $stmt_proc = $pdo->prepare("SELECT email_address FROM users WHERE branch_id = ? AND user_type = 'Processor' LIMIT 1");
+                $stmt_proc->execute([$data['branch_id']]);
+                $processor = $stmt_proc->fetch(PDO::FETCH_ASSOC);
+
+                if ($processor && !empty($processor['email_address'])) {
+                    $mail = new PHPMailer(true);
+
+                    // Server settings
+                    $mail->isSMTP();
+                    $mail->Host       = 'smtp.gmail.com'; // Replace with your SMTP host
+                    $mail->SMTPAuth   = true;
+                    $mail->Username   = 'anonymous.00112211@gmail.com'; // Replace with system email
+                    $mail->Password   = 'xwucrpggtanqrvwp'; // Replace with App Password
+                    $mail->SMTPSecure = PHPMailer::ENCRYPTION_STARTTLS;
+                    $mail->Port       = 587;
+
+                    // Recipients
+                    $mail->setFrom('no-reply@nfa.gov.ph', 'NFA Appointment System');
+                    $mail->addAddress($processor['email_address']); 
+
+                    // Content
+                    $mail->isHTML(true);
+                    $mail->Subject = 'New Appointment: ' . $reference_number;
+                    $mail->Body    = "
+                        <h3>New Farmer Appointment Notification</h3>
+                        <p>An appointment has been scheduled and requires review.</p>
+                        <ul>
+                            <li><strong>Farmer:</strong> {$data['first_name']} {$data['last_name']}</li>
+                            <li><strong>Reference #:</strong> {$reference_number}</li>
+                            <li><strong>Date:</strong> {$data['date']}</li>
+                            <li><strong>Slot:</strong> {$data['time_slot']}</li>
+                            <li><strong>Volume:</strong> {$data['volume']} bags</li>
+                        </ul>
+                        <p>Please log in to the portal to manage this appointment.</p>
+                    ";
+
+                    $mail->send();
+                }
+            } catch (Exception $e) {
+                // Log email error but do not fail the submission response
+                error_log("Email notification failed: " . $mail->ErrorInfo);
+            }
 
             echo json_encode(['success' => true, 'referenceNumber' => $reference_number]);
 
@@ -381,5 +427,280 @@ switch ($action) {
         echo json_encode(['success' => false, 'error' => 'Invalid ID']);
     }
     break;
+
+    case 'getWeeklyData':
+        // 6. Weekly activity data for processor dashboard
+        $branch_id = (int)sanitize_input($_GET['branch_id'] ?? 0);
+        $days = (int)sanitize_input($_GET['days'] ?? 7);
+
+        if ($branch_id <= 0) {
+            http_response_code(400);
+            echo json_encode(['success' => false, 'error' => 'Missing branch ID.']);
+            break;
+        }
+
+        if ($days <= 0) { $days = 7; }
+        if ($days > 60) { $days = 60; }
+
+        $start_date = date('Y-m-d', strtotime('-' . ($days - 1) . ' days'));
+
+        try {
+            $stmt = $pdo->prepare("SELECT DATE(date) AS day, COUNT(*) AS count, SUM(volume) AS total_volume
+                                   FROM appointments
+                                   WHERE branch_id = ? AND date >= ? AND status != 'cancelled'
+                                   GROUP BY DATE(date)
+                                   ORDER BY day");
+            $stmt->execute([$branch_id, $start_date]);
+            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+            $byDate = [];
+            foreach ($rows as $row) {
+                $byDate[$row['day']] = [
+                    'count' => (int)$row['count'],
+                    'volume' => (float)$row['total_volume']
+                ];
+            }
+
+            $labels = [];
+            $counts = [];
+            $volumes = [];
+
+            for ($i = $days - 1; $i >= 0; $i--) {
+                $date = date('Y-m-d', strtotime('-' . $i . ' days'));
+                $labels[] = date('D', strtotime($date));
+
+                if (isset($byDate[$date])) {
+                    $counts[] = $byDate[$date]['count'];
+                    $volumes[] = (int)$byDate[$date]['volume'];
+                } else {
+                    $counts[] = 0;
+                    $volumes[] = 0;
+                }
+            }
+
+            echo json_encode([
+                'success' => true,
+                'labels' => $labels,
+                'counts' => $counts,
+                'volumes' => $volumes
+            ]);
+        } catch (\PDOException $e) {
+            error_log('getWeeklyData failed: ' . $e->getMessage());
+            http_response_code(500);
+            echo json_encode(['success' => false, 'error' => 'Failed to retrieve weekly data.']);
+        }
+        break;
+
+    case 'confirmAppointment':
+        // 7. Confirm an appointment from processor dashboard
+        $data = json_decode(file_get_contents('php://input'), true);
+        $appointment_id = (int)sanitize_input($data['appointment_id'] ?? 0);
+
+        if ($appointment_id <= 0) {
+            http_response_code(400);
+            echo json_encode(['success' => false, 'error' => 'Invalid appointment ID.']);
+            break;
+        }
+
+        try {
+            $stmt = $pdo->prepare("UPDATE appointments SET status = 'confirmed' WHERE appointment_id = ? AND status != 'cancelled'");
+            $stmt->execute([$appointment_id]);
+
+            echo json_encode(['success' => true]);
+        } catch (\PDOException $e) {
+            error_log('confirmAppointment failed: ' . $e->getMessage());
+            http_response_code(500);
+            echo json_encode(['success' => false, 'error' => 'Failed to confirm appointment.']);
+        }
+        break;
+
+    case 'completeAppointment':
+        // 8. Mark an appointment as completed and adjust inventory
+        $data = json_decode(file_get_contents('php://input'), true);
+        $appointment_id = (int)sanitize_input($data['appointment_id'] ?? 0);
+        $new_volume = (float)sanitize_input($data['volume'] ?? 0);
+
+        if ($appointment_id <= 0 || $new_volume < 0) {
+            http_response_code(400);
+            echo json_encode(['success' => false, 'error' => 'Invalid appointment data.']);
+            break;
+        }
+
+        try {
+            $pdo->beginTransaction();
+
+            // Fetch appointment and branch
+            $stmt = $pdo->prepare("SELECT branch_id, region_id, volume, status FROM appointments WHERE appointment_id = ? FOR UPDATE");
+            $stmt->execute([$appointment_id]);
+            $appt = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$appt) {
+                $pdo->rollBack();
+                http_response_code(404);
+                echo json_encode(['success' => false, 'error' => 'Appointment not found.']);
+                break;
+            }
+
+            $branch_id = (int)$appt['branch_id'];
+            $region_id = (int)$appt['region_id'];
+            $status = strtolower((string)($appt['status'] ?? ''));
+
+            if ($status === 'cancelled') {
+                $pdo->rollBack();
+                http_response_code(400);
+                echo json_encode(['success' => false, 'error' => 'Cannot record delivery for a cancelled appointment.']);
+                break;
+            }
+            if ($status === 'completed') {
+                $pdo->rollBack();
+                http_response_code(400);
+                echo json_encode(['success' => false, 'error' => 'This appointment was already completed.']);
+                break;
+            }
+
+            // Update appointment volume and status
+            $stmtUp = $pdo->prepare("UPDATE appointments SET volume = ?, status = 'completed' WHERE appointment_id = ?");
+            $stmtUp->execute([$new_volume, $appointment_id]);
+
+            // Adjust inventory for the branch
+            $stmtCap = $pdo->prepare("SELECT volume_id, inventory FROM volume_capacity WHERE branch_id = ? FOR UPDATE");
+            $stmtCap->execute([$branch_id]);
+            $cap = $stmtCap->fetch(PDO::FETCH_ASSOC);
+
+            if ($cap) {
+                // Inventory represents actual received bags: always ADD delivered volume on completion.
+                $new_inventory = (float)$cap['inventory'] + $new_volume;
+                $stmtInv = $pdo->prepare("UPDATE volume_capacity SET inventory = ? WHERE branch_id = ?");
+                $stmtInv->execute([$new_inventory, $branch_id]);
+            } else {
+                // If capacity row doesn't exist for this branch, create it so inventory can be tracked.
+                $stmtIns = $pdo->prepare("INSERT INTO volume_capacity (region_id, branch_id, warehouse_capacity, inventory) VALUES (?, ?, ?, ?)");
+                $stmtIns->execute([$region_id, $branch_id, 0, $new_volume]);
+                $new_inventory = $new_volume;
+            }
+
+            $pdo->commit();
+            echo json_encode(['success' => true, 'inventory' => $new_inventory]);
+        } catch (\PDOException $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            error_log('completeAppointment failed: ' . $e->getMessage());
+            http_response_code(500);
+            echo json_encode(['success' => false, 'error' => 'Failed to record delivery.']);
+        }
+        break;
+
+    case 'rescheduleAppointment':
+        // 9. Reschedule an appointment to a new date/slot
+        $data = json_decode(file_get_contents('php://input'), true);
+        $appointment_id = (int)sanitize_input($data['appointment_id'] ?? 0);
+        $date = sanitize_input($data['date'] ?? '');
+        $time_slot = strtoupper(sanitize_input($data['time_slot'] ?? ''));
+
+        if ($appointment_id <= 0 || !$date || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $date) || !in_array($time_slot, ['AM','PM'], true)) {
+            http_response_code(400);
+            echo json_encode(['success' => false, 'error' => 'Invalid reschedule data.']);
+            break;
+        }
+
+        try {
+            $pdo->beginTransaction();
+
+            // Fetch appointment and branch
+            $stmt = $pdo->prepare("SELECT branch_id FROM appointments WHERE appointment_id = ? FOR UPDATE");
+            $stmt->execute([$appointment_id]);
+            $appt = $stmt->fetch(PDO::FETCH_ASSOC);
+            if (!$appt) {
+                $pdo->rollBack();
+                http_response_code(404);
+                echo json_encode(['success' => false, 'error' => 'Appointment not found.']);
+                break;
+            }
+            $branch_id = (int)$appt['branch_id'];
+
+            // Get default slot capacity similar to getBranchInfo (default rows may have NULL or empty string date)
+            $stmtCap = $pdo->prepare("SELECT capacity_am, capacity_pm FROM branch_slot_capacity WHERE branch_id = :branch_id AND (`date` IS NULL OR `date` = '')");
+            $stmtCap->bindParam(':branch_id', $branch_id, PDO::PARAM_INT);
+            $stmtCap->execute();
+            $default_capacity = $stmtCap->fetch(PDO::FETCH_ASSOC);
+            if (!$default_capacity) {
+                $stmtAny = $pdo->prepare("SELECT capacity_am, capacity_pm FROM branch_slot_capacity WHERE branch_id = :branch_id ORDER BY capacity_id DESC LIMIT 1");
+                $stmtAny->bindParam(':branch_id', $branch_id, PDO::PARAM_INT);
+                $stmtAny->execute();
+                $default_capacity = $stmtAny->fetch(PDO::FETCH_ASSOC);
+            }
+            $default_capacity = $default_capacity ?: ['capacity_am' => 5, 'capacity_pm' => 5];
+
+            $slot_column = $time_slot === 'PM' ? 'capacity_pm' : 'capacity_am';
+            $slot_capacity = (int)$default_capacity[$slot_column];
+
+            // Count existing bookings for that date/slot excluding this appointment
+            $stmtCount = $pdo->prepare("SELECT COUNT(*) FROM appointments WHERE branch_id = ? AND `date` = ? AND time_slot = ? AND status != 'cancelled' AND appointment_id != ?");
+            $stmtCount->execute([$branch_id, $date, $time_slot, $appointment_id]);
+            $booked = (int)$stmtCount->fetchColumn();
+
+            if ($booked >= $slot_capacity) {
+                $pdo->rollBack();
+                http_response_code(400);
+                echo json_encode(['success' => false, 'error' => 'Selected slot is already full.']);
+                break;
+            }
+
+            // Apply reschedule and keep status confirmed
+            $stmtUp = $pdo->prepare("UPDATE appointments SET `date` = ?, time_slot = ?, status = 'confirmed' WHERE appointment_id = ?");
+            $stmtUp->execute([$date, $time_slot, $appointment_id]);
+
+            $pdo->commit();
+            echo json_encode(['success' => true]);
+        } catch (\PDOException $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            error_log('rescheduleAppointment failed: ' . $e->getMessage());
+            http_response_code(500);
+            echo json_encode(['success' => false, 'error' => 'Failed to reschedule appointment.']);
+        }
+        break;
+
+    case 'getDashboardData':
+        // 10. Lightweight dashboard refresh data
+        $branch_id = (int)sanitize_input($_GET['branch_id'] ?? 0);
+
+        if ($branch_id <= 0) {
+            http_response_code(400);
+            echo json_encode(['success' => false, 'error' => 'Missing branch ID.']);
+            break;
+        }
+
+        try {
+            // Capacity and inventory
+            $stmtCap = $pdo->prepare("SELECT warehouse_capacity, inventory FROM volume_capacity WHERE branch_id = ?");
+            $stmtCap->execute([$branch_id]);
+            $cap = $stmtCap->fetch(PDO::FETCH_ASSOC) ?: ['warehouse_capacity' => 0, 'inventory' => 0];
+
+            $capacity = (float)$cap['warehouse_capacity'];
+            $inventory = (float)$cap['inventory'];
+            $available = max(0, $capacity - $inventory);
+
+            // Pending appointments count (all future + today)
+            $today = date('Y-m-d');
+            $stmtPending = $pdo->prepare("SELECT COUNT(*) FROM appointments WHERE branch_id = ? AND status = 'pending' AND date >= ?");
+            $stmtPending->execute([$branch_id, $today]);
+            $pending = (int)$stmtPending->fetchColumn();
+
+            echo json_encode([
+                'success' => true,
+                'capacity' => $capacity,
+                'inventory' => $inventory,
+                'available' => $available,
+                'pending_count' => $pending
+            ]);
+        } catch (\PDOException $e) {
+            error_log('getDashboardData failed: ' . $e->getMessage());
+            http_response_code(500);
+            echo json_encode(['success' => false, 'error' => 'Failed to refresh dashboard data.']);
+        }
+        break;
 }
 ?>

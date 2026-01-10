@@ -17,6 +17,11 @@ try {
     // Optional: Set character set for proper handling of special characters
     $pdo->exec("set names utf8");
 
+    // Ensure PHP date/time functions use local timezone (Philippines)
+    if (function_exists('date_default_timezone_set')) {
+        date_default_timezone_set('Asia/Manila');
+    }
+
 } catch(PDOException $e) {
     // If connection fails, display error and stop script execution
     die("ERROR: Could not connect to database. " . $e->getMessage());

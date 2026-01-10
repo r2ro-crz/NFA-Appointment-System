@@ -6,26 +6,124 @@
     <title>NFA Appointment System - Welcome</title>
     <link rel="icon" href="img/nfa-logo.png" type="image/png"/>
     <link rel="stylesheet" href="css/login.css"> 
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 </head>
 <body class="landing-body">
+    <!-- Video background -->
     <video class="bg-video" autoplay muted loop playsinline>
         <source src="img/nfa-intro.mp4" type="video/mp4">
-        <!-- fallback text -->
+        <!-- Fallback image if video fails -->
+        <div class="video-fallback"></div>
     </video>
+    
+    <!-- Dark overlay with gradient -->
+    <div class="overlay"></div>
+    
+    <!-- Main content container -->
     <div class="landing-container">
-        <h1>National Food Authority (NFA)</h1>
-        <h2>Farmer's Appointment Portal</h2>
-
-        <div class="action-buttons">
-            <a href="login.php" class="action-button login-button">
-                🧑‍💻 Staff Login (Admin / Processor)
-            </a>
-            <a href="farmer_schedule.php" class="action-button farmer-button">
-                📅 Schedule Appointment (Farmer)
-            </a>
+        <!-- Logo/Header area -->
+        <div class="header-section">
+            <div class="logo-container">
+                <img src="img/nfa-logo.png" alt="NFA Logo" class="nfa-logo">
+            </div>
+            <h1 class="main-title">
+                <span class="title-line">National Food Authority</span>
+                <span class="subtitle-line">Farmer's Appointment Portal</span>
+            </h1>
+            <p class="welcome-text">Welcome to the official appointment system for rice farmers and NFA personnel. Please select your role to continue.</p>
         </div>
         
-        <p class="note">Please select your role to proceed to the correct portal.</p>
+        <!-- Role selection cards -->
+        <div class="role-selection">
+            <div class="role-card staff-card">
+                <div class="card-icon">
+                    <i class="fas fa-user-tie"></i>
+                </div>
+                <div class="card-content">
+                    <h3>Staff Portal</h3>
+                    <p>For NFA administrators and processors to manage appointments and farmer data.</p>
+                    <ul class="feature-list">
+                        <li><i class="fas fa-check-circle"></i> View appointment schedules</li>
+                        <li><i class="fas fa-check-circle"></i> Process farmer applications</li>
+                        <li><i class="fas fa-check-circle"></i> Manage system settings</li>
+                    </ul>
+                </div>
+                <a href="login.php" class="role-button staff-button">
+                    <span class="button-text">Staff Login</span>
+                    <i class="fas fa-arrow-right"></i>
+                </a>
+            </div>
+            
+            <div class="role-card farmer-card">
+                <div class="card-icon">
+                    <i class="fas fa-tractor"></i>
+                </div>
+                <div class="card-content">
+                    <h3>Farmer Portal</h3>
+                    <p>For rice farmers to schedule appointments for services and assistance.</p>
+                    <ul class="feature-list">
+                        <li><i class="fas fa-check-circle"></i> Schedule new appointments</li>
+                        <li><i class="fas fa-check-circle"></i> Check appointment status</li>
+                        <li><i class="fas fa-check-circle"></i> View requirements checklist</li>
+                    </ul>
+                </div>
+                <a href="farmer_schedule.php" class="role-button farmer-button">
+                    <span class="button-text">Schedule Appointment</span>
+                    <i class="fas fa-arrow-right"></i>
+                </a>
+            </div>
+        </div>
+        
+        <!-- Additional info -->
+        <div class="additional-info">
+            <div class="info-card">
+                <i class="fas fa-clock"></i>
+                <div>
+                    <h4>Office Hours</h4>
+                    <p>Monday - Friday, 8:00 AM - 5:00 PM</p>
+                </div>
+            </div>
+            <div class="info-card">
+                <i class="fas fa-phone"></i>
+                <div>
+                    <h4>Need Help?</h4>
+                    <p>Contact us at (02) 8929-6701</p>
+                </div>
+            </div>
+            <div class="info-card">
+                <i class="fas fa-info-circle"></i>
+                <div>
+                    <h4>System Info</h4>
+                    <p>Version 2.1 • Updated March 2023</p>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Language selector -->
+        <div class="language-selector">
+            <span class="language-label"><i class="fas fa-globe"></i> Language:</span>
+            <select id="languageSelect">
+                <option value="en" selected>English</option>
+                <option value="fil">Filipino</option>
+            </select>
+        </div>
+        
+        <!-- Footer -->
+        <div class="footer">
+            <p class="copyright">© 2023 National Food Authority. All rights reserved.</p>
+            <p class="note">This system is designed to streamline farmer appointment processes.</p>
+            <div class="footer-links">
+                <a href="#"><i class="fas fa-shield-alt"></i> Privacy Policy</a>
+                <a href="#"><i class="fas fa-file-alt"></i> Terms of Use</a>
+                <a href="#"><i class="fas fa-question-circle"></i> Help Center</a>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Notification toast -->
+    <div class="toast" id="languageToast">
+        <span>Language changed to English</span>
+        <button class="toast-close"><i class="fas fa-times"></i></button>
     </div>
     
     <script src="js/landing_app.js"></script>

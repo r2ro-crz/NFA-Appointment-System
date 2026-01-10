@@ -2,467 +2,662 @@
 session_start();
 require_once 'php_helper/db_config.php';
 
-// Ensure only Processors can access
 if (!isset($_SESSION["loggedin"]) || $_SESSION["user_type"] !== 'Processor') {
     header("location: login.php");
     exit;
 }
 
-
 $branch_id = $_SESSION["branch_id"];
-// Fetch processor's first_name
+$user_id = $_SESSION['user_id'] ?? $_SESSION['id'] ?? null;
 
-// Try to get user id from session (commonly 'id' or 'user_id')
-$user_id = isset($_SESSION['user_id']) ? $_SESSION['user_id'] : (isset($_SESSION['id']) ? $_SESSION['id'] : null);
+// Get user details
 if ($user_id) {
-    $user_stmt = $pdo->prepare("SELECT first_name FROM users WHERE user_id = ?");
+    // users table stores email as email_address
+    $user_stmt = $pdo->prepare("SELECT first_name, last_name, email_address FROM users WHERE user_id = ?");
     $user_stmt->execute([$user_id]);
     $user = $user_stmt->fetch(PDO::FETCH_ASSOC);
     $first_name = $user ? $user['first_name'] : $_SESSION['username'];
+    $last_name = $user ? $user['last_name'] : '';
+    $user_email = $user ? $user['email_address'] : '';
 } else {
     $first_name = $_SESSION['username'];
+    $last_name = '';
+    $user_email = '';
 }
 
-// Fetch branch name
-$branch_stmt = $pdo->prepare("SELECT branch_name FROM branch WHERE branch_id = ?");
+// Generate initials for avatar (e.g., "JD")
+$initials = '';
+if (!empty($first_name)) {
+    $initials .= strtoupper(substr($first_name, 0, 1));
+}
+if (!empty($last_name)) {
+    $initials .= strtoupper(substr($last_name, 0, 1));
+}
+if ($initials === '' && !empty($_SESSION['username'])) {
+    $initials = strtoupper(substr($_SESSION['username'], 0, 1));
+}
+
+// Get branch details (branch table has region_id; join regions for name)
+$branch_stmt = $pdo->prepare("SELECT b.branch_name, r.region_name FROM branch b JOIN regions r ON b.region_id = r.region_id WHERE b.branch_id = ?");
 $branch_stmt->execute([$branch_id]);
 $branch = $branch_stmt->fetch(PDO::FETCH_ASSOC);
 $branch_name = $branch ? $branch['branch_name'] : $branch_id;
+$branch_region = $branch ? $branch['region_name'] : 'N/A';
+// Address is not stored in schema; display placeholder
+$branch_address = 'N/A';
 
-// 1. Fetch Capacity Data for Cards
+// Get warehouse capacity
 $stmt = $pdo->prepare("SELECT warehouse_capacity, inventory FROM volume_capacity WHERE branch_id = ?");
 $stmt->execute([$branch_id]);
 $cap = $stmt->fetch(PDO::FETCH_ASSOC) ?: ['warehouse_capacity' => 0, 'inventory' => 0];
+$available_capacity = max(0, $cap['warehouse_capacity'] - $cap['inventory']);
+$capacity_percentage = $cap['warehouse_capacity'] > 0 ? ($cap['inventory'] / $cap['warehouse_capacity']) * 100 : 0;
 
-// 2. Fetch Notifications (Pending & Cancelled)
-$notif_stmt = $pdo->prepare("SELECT appointment_id, first_name, last_name, status, date, is_read FROM appointments 
-                             WHERE branch_id = ? AND status IN ('pending', 'cancelled') 
-                             ORDER BY appointment_id DESC LIMIT 10");
+// Get notifications (appointments table has no created_at; use date/time_slot)
+$notif_stmt = $pdo->prepare("SELECT appointment_id, first_name, last_name, status, date, time_slot, volume, is_read FROM appointments WHERE branch_id = ? AND status IN ('pending', 'cancelled') ORDER BY appointment_id DESC LIMIT 10");
 $notif_stmt->execute([$branch_id]);
 $notifications = $notif_stmt->fetchAll(PDO::FETCH_ASSOC);
-// Count unread pending notifications for badge
 $new_count = count(array_filter($notifications, fn($n) => $n['status'] == 'pending' && (empty($n['is_read']) || $n['is_read'] == 0)));
+
+// Get branch-wide appointment stats
+$today = date('Y-m-d');
+$today_stmt = $pdo->prepare("SELECT COUNT(*) as count,
+    SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending,
+    SUM(CASE WHEN status = 'confirmed' THEN 1 ELSE 0 END) as confirmed
+    FROM appointments
+    WHERE branch_id = ? AND status != 'cancelled'");
+$today_stmt->execute([$branch_id]);
+$today_stats = $today_stmt->fetch(PDO::FETCH_ASSOC);
+
+// Get recent appointments (last 7 days)
+$week_ago = date('Y-m-d', strtotime('-7 days'));
+$weekly_stmt = $pdo->prepare("SELECT DATE(date) as day, COUNT(*) as count, 
+    SUM(volume) as total_volume FROM appointments 
+    WHERE branch_id = ? AND date >= ? AND status != 'cancelled'
+    GROUP BY DATE(date) ORDER BY day");
+$weekly_stmt->execute([$branch_id, $week_ago]);
+$weekly_data = $weekly_stmt->fetchAll(PDO::FETCH_ASSOC);
+
+// Prepare weekly data for chart
+$week_days = [];
+$week_counts = [];
+$week_volumes = [];
+
+for ($i = 6; $i >= 0; $i--) {
+    $date = date('Y-m-d', strtotime("-$i days"));
+    $week_days[] = date('D', strtotime($date));
+    
+    $found = false;
+    foreach ($weekly_data as $data) {
+        if ($data['day'] == $date) {
+            $week_counts[] = (int)$data['count'];
+            $week_volumes[] = (int)$data['total_volume'];
+            $found = true;
+            break;
+        }
+    }
+    
+    if (!$found) {
+        $week_counts[] = 0;
+        $week_volumes[] = 0;
+    }
+}
+
+// Get top farmers by volume
+$farmer_stmt = $pdo->prepare("SELECT farmer_id, first_name, last_name, SUM(volume) as total_volume 
+    FROM appointments 
+    WHERE branch_id = ? AND status != 'cancelled'
+    GROUP BY farmer_id 
+    ORDER BY total_volume DESC 
+    LIMIT 5");
+$farmer_stmt->execute([$branch_id]);
+$top_farmers = $farmer_stmt->fetchAll(PDO::FETCH_ASSOC);
 ?>
 
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>NFA Processor Dashboard</title>
+    <title>NFA Processor Dashboard - Branch Management</title>
     <link rel="stylesheet" href="css/style.css">
+    <link rel="stylesheet" href="css/processor.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <style>
-        /* Modern Top Navigation */
-        .top-nav {
-            background: #2c3e50;
-            color: white;
-            padding: 0.8rem 2rem;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            position: sticky;
-            top: 0;
-            z-index: 1000;
-        }
-        .logo {
-            display: flex;
-            align-items: center;
-            gap: 20px;
-        }
-        .nfa-logo {
-            height: 64px;
-            width: auto;
-            display: block;
-        }
-        .nfa-title {
-            font-size: 20px;
-            font-weight: 700;
-            color: white;
-            letter-spacing: 1px;
-        }
-        .nav-links { display: flex; gap: 2rem; }
-        .nav-links a { color: white; text-decoration: none; font-weight: 500; }
-        .nav-links a.active { border-bottom: 2px solid #2ecc71; }
-
-        /* Notification Styling */
-        .notif-wrapper { position: relative; cursor: pointer; }
-        .notif-badge {
-            position: absolute; top: -5px; right: -10px;
-            background: #e74c3c; color: white;
-            border-radius: 50%; padding: 2px 6px; font-size: 0.7rem;
-        }
-        .notif-dropdown {
-            display: none; position: absolute; right: 0; top: 35px;
-            background: white; border: 1px solid #ddd; width: 300px;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.15); border-radius: 8px; color: #333;
-        }
-        .notif-item { padding: 10px; border-bottom: 1px solid #eee; font-size: 0.85rem; }
-        .notif-item.unread { background: #f0f7ff; border-left: 4px solid #3498db; }
-        
-        /* Dashboard Grid from Image */
-        .stats-grid {
-            display: grid; grid-template-columns: repeat(4, 1fr);
-            gap: 1.5rem; margin: 2rem 0;
-        }
-        .stat-card {
-            background: white; padding: 1.5rem; border-radius: 10px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.05); text-align: left;
-        }
-        .stat-card h4 { color: #7f8c8d; font-size: 0.9rem; margin-bottom: 0.5rem; }
-        .stat-card .value { font-size: 1.8rem; font-weight: bold; color: #2c3e50; }
-        
-        .chart-container {
-            background: white; padding: 2rem; border-radius: 10px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.05); margin-top: 2rem;
-        }
-    </style>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 </head>
 <body class="dashboard">
+    <!-- Hidden data store for JavaScript -->
+    <div id="chart-data-store" 
+         data-capacity="<?php echo (float)$cap['warehouse_capacity']; ?>" 
+         data-inventory="<?php echo (float)$cap['inventory']; ?>" 
+         data-available="<?php echo (float)$available_capacity; ?>"
+         data-percentage="<?php echo round($capacity_percentage, 1); ?>"
+         data-week-days='<?php echo json_encode($week_days); ?>'
+         data-week-counts='<?php echo json_encode($week_counts); ?>'
+         data-week-volumes='<?php echo json_encode($week_volumes); ?>'
+         style="display:none;"></div>
 
+    <!-- Top Navigation -->
     <nav class="top-nav">
         <div class="logo">
             <img src="img/nfa-logo.png" alt="NFA" class="nfa-logo">
-            <span class="nfa-title">NFA Processor Portal</span>
+            <div class="logo-text">
+                <h1 class="nfa-title">National Food Authority</h1>
+                <p class="nfa-subtitle">Processor Dashboard</p>
+            </div>
         </div>
-        <div class="nav-links">
-            <a href="processor_dashboard.php" class="active"><i class="fas fa-chart-line"></i> Dashboard</a>
-            <a href="operator.html"><i class="fas fa-list"></i> Appointment List</a>
+        
+        <div class="nav-center">
+            <div class="nav-links">
+                <a href="processor_dashboard.php" class="nav-link active">
+                    <i class="fas fa-chart-line"></i>
+                    <span>Dashboard</span>
+                </a>
+                <a href="operator.php" class="nav-link">
+                    <i class="fas fa-calendar-check"></i>
+                    <span>Appointments</span>
+                </a>
+                <a href="capacity_management.php" class="nav-link">
+                    <i class="fas fa-warehouse"></i>
+                    <span>Capacity</span>
+                </a>
+                <a href="reports.php" class="nav-link">
+                    <i class="fas fa-chart-bar"></i>
+                    <span>Reports</span>
+                </a>
+                <a href="farmers.php" class="nav-link">
+                    <i class="fas fa-users"></i>
+                    <span>Farmers</span>
+                </a>
+            </div>
         </div>
-        <div class="user-actions" style="display:flex; gap: 20px; align-items:center;">
+        
+        <div class="user-actions">
             <div class="notif-wrapper" id="notifWrapper">
-                <i class="fas fa-bell fa-lg"></i>
-                <?php if ($new_count > 0): ?>
-                    <span class="notif-badge"><?php echo $new_count; ?></span>
-                <?php endif; ?>
-                <div class="notif-dropdown" id="notifDropdown">
-                    <div style="padding:10px; border-bottom:1px solid #ddd;"><strong>Notifications</strong></div>
-                    <div id="notifList" style="max-height:260px; overflow-y:auto;">
-                    <?php foreach ($notifications as $i => $n): 
-                        $is_read = isset($n['is_read']) ? $n['is_read'] : 0;
-                        $unread = (empty($is_read) || $is_read == 0);
-                        $display = ($i < 5) ? '' : 'display:none;';
-                    ?>
-                        <div class="notif-item <?php echo $unread ? 'unread' : ''; ?>" 
-                            data-appointment-id="<?php echo $n['appointment_id']; ?>" style="<?php echo $display; ?>">
-                            New appointment from <strong><?php echo htmlspecialchars($n['first_name']); ?></strong> for <?php echo $n['date']; ?>.
-                            <br><small>Status: <?php echo ucfirst($n['status']); ?></small>
-                            <button class="action-btn" style="padding:2px 5px; font-size:0.7rem; margin-top:5px;">
-                                <?php echo ($unread ? 'Mark as Read' : 'Mark as Unread'); ?>
-                            </button>
-                        </div>
-                    <?php endforeach; ?>
-                    </div>
-                    <?php if (count($notifications) > 5): ?>
-                        <button id="seeAllBtn" onclick="toggleNotifView(true)" style="width:100%;padding:6px 0;background:#f4f4f4;border:none;cursor:pointer;">See All</button>
-                        <button id="seeLessBtn" onclick="toggleNotifView(false)" style="width:100%;padding:6px 0;background:#f4f4f4;border:none;cursor:pointer;display:none;">See Less</button>
+                <div class="notif-icon">
+                    <i class="fas fa-bell"></i>
+                    <?php if ($new_count > 0): ?>
+                        <span class="notif-badge pulse"><?php echo $new_count; ?></span>
                     <?php endif; ?>
                 </div>
+                <div class="notif-dropdown" id="notifDropdown">
+                    <div class="notif-header">
+                        <h4><i class="fas fa-bell"></i> Notifications</h4>
+                        <?php if ($new_count > 0): ?>
+                            <button class="mark-all-read" id="markAllRead">
+                                <i class="fas fa-check-double"></i> Mark All Read
+                            </button>
+                        <?php endif; ?>
+                    </div>
+                    <div class="notif-list" id="notifList">
+                        <?php if (count($notifications) > 0): ?>
+                            <?php foreach ($notifications as $i => $n): 
+                                $unread = (empty($n['is_read']) || $n['is_read'] == 0);
+                                $status_class = $n['status'] == 'pending' ? 'status-pending' : 'status-cancelled';
+                                $time_label = $n['time_slot'] == 'AM' ? 'Morning' : 'Afternoon';
+                            ?>
+                                <div class="notif-item <?php echo $unread ? 'unread' : ''; ?>" data-appointment-id="<?php echo $n['appointment_id']; ?>">
+                                    <div class="notif-icon-small">
+                                        <?php if ($n['status'] == 'pending'): ?>
+                                            <i class="fas fa-clock status-pending"></i>
+                                        <?php else: ?>
+                                            <i class="fas fa-times-circle status-cancelled"></i>
+                                        <?php endif; ?>
+                                    </div>
+                                    <div class="notif-content">
+                                        <div class="notif-title">
+                                            <?php echo $n['status'] == 'pending' ? 'New Appointment' : 'Cancellation'; ?>
+                                            <span class="notif-time"><?php echo date('M d', strtotime($n['date'])); ?> (<?php echo $time_label; ?>)</span>
+                                        </div>
+                                        <div class="notif-details">
+                                            <strong><?php echo htmlspecialchars($n['first_name'] . ' ' . $n['last_name']); ?></strong> 
+                                            for <?php echo date('M d', strtotime($n['date'])); ?> (<?php echo $time_label; ?>)
+                                        </div>
+                                        <div class="notif-meta">
+                                            <span class="volume-badge">
+                                                <i class="fas fa-weight-hanging"></i> <?php echo number_format($n['volume']); ?> bags
+                                            </span>
+                                            <span class="status-badge <?php echo $status_class; ?>">
+                                                <?php echo ucfirst($n['status']); ?>
+                                            </span>
+                                        </div>
+                                    </div>
+                                    <div class="notif-actions">
+                                        <button class="action-btn mark-read-btn" title="<?php echo $unread ? 'Mark as Read' : 'Mark as Unread'; ?>">
+                                            <?php if ($unread): ?>
+                                                <i class="fas fa-check-circle"></i>
+                                            <?php else: ?>
+                                                <i class="fas fa-circle"></i>
+                                            <?php endif; ?>
+                                        </button>
+                                    </div>
+                                </div>
+                            <?php endforeach; ?>
+                        <?php else: ?>
+                            <div class="no-notifications">
+                                <i class="fas fa-check-circle"></i>
+                                <p>No new notifications</p>
+                            </div>
+                        <?php endif; ?>
+                    </div>
+                    <div class="notif-footer">
+                        <a href="operator.php" class="view-all">
+                            <i class="fas fa-list"></i> View All Appointments
+                        </a>
+                    </div>
+                </div>
             </div>
-            <a href="login.php" class="logout-btn" style="text-decoration:none;">Logout</a>
+            
+            <div class="user-profile">
+                <div class="user-avatar">
+                    <?php echo htmlspecialchars($initials); ?>
+                </div>
+                <div class="user-info">
+                    <span class="user-name"><?php echo htmlspecialchars($first_name . ' ' . $last_name); ?></span>
+                    <span class="user-role">Processor</span>
+                </div>
+                <div class="user-dropdown" id="userDropdown">
+                    <div class="user-dropdown-header">
+                        <div class="user-dropdown-avatar">
+                            <?php echo htmlspecialchars($initials); ?>
+                        </div>
+                        <div class="user-dropdown-info">
+                            <strong><?php echo htmlspecialchars($first_name . ' ' . $last_name); ?></strong>
+                            <small><?php echo htmlspecialchars($user_email); ?></small>
+                            <div class="user-role-badge">Processor</div>
+                        </div>
+                    </div>
+                    <div class="user-dropdown-menu">
+                        <a href="profile.php" class="dropdown-item">
+                            <i class="fas fa-user-cog"></i> My Profile
+                        </a>
+                        <a href="settings.php" class="dropdown-item">
+                            <i class="fas fa-cog"></i> Settings
+                        </a>
+                        <div class="dropdown-divider"></div>
+                        <a href="login.php" class="dropdown-item logout">
+                            <i class="fas fa-sign-out-alt"></i> Logout
+                        </a>
+                    </div>
+                </div>
+            </div>
         </div>
     </nav>
 
-    <div class="container">
-        <header style="margin-top:2rem;">
-            <h2>Welcome, <?php echo htmlspecialchars($first_name); ?></h2>
-            <p>Monitoring Branch: <strong style="color:#2ecc71;"><?php echo htmlspecialchars($branch_name); ?></strong></p>
-        </header>
-
-        <div class="stats-grid">
-            <div class="stat-card" style="border-top: 4px solid #e74c3c;">
-                <h4>Maximum Warehouse Capacity</h4>
-                <div class="value"><?php echo number_format($cap['warehouse_capacity']); ?></div>
+    <!-- Main Content -->
+    <div class="container-fluid">
+        <!-- Welcome Header -->
+        <div class="welcome-header">
+            <div class="welcome-text">
+                <h1>Welcome back, <?php echo htmlspecialchars($first_name); ?>!</h1>
+                <p>Here's what's happening at your branch today</p>
             </div>
-            <div class="stat-card" style="border-top: 4px solid #3498db;">
-                <h4>Current Stock</h4>
-                <div class="value"><?php echo number_format($cap['inventory']); ?></div>
-            </div>
-            <div class="stat-card" style="border-top: 4px solid #2ecc71;">
-                <h4>Available Stock Capacity</h4>
-                <div class="value"><?php echo number_format($cap['warehouse_capacity'] - $cap['inventory']); ?></div>
-            </div>
-            <div class="stat-card" style="border-top: 4px solid #f39c12;">
-                <h4>Pending Appointments</h4>
-                <div class="value"><?php echo $new_count; ?></div>
+            <div class="branch-info">
+                <div class="branch-card">
+                    <div class="branch-icon">
+                        <i class="fas fa-warehouse"></i>
+                    </div>
+                    <div class="branch-details">
+                        <h3><?php echo htmlspecialchars($branch_name); ?></h3>
+                        <p><i class="fas fa-map-marker-alt"></i> <?php echo htmlspecialchars($branch_address); ?></p>
+                        <p><i class="fas fa-globe-asia"></i> <?php echo htmlspecialchars($branch_region); ?> Region</p>
+                    </div>
+                </div>
             </div>
         </div>
 
-        <!-- Tab Navigation for Graphs -->
-        <div class="graph-tabs" style="display:flex; gap:2rem; margin-top:1.5rem;">
-            <button id="tab-graph1" class="graph-tab active" style="padding:10px 24px; border:none; background:#3498db; color:white; border-radius:6px 6px 0 0; font-weight:600; cursor:pointer;">Warehouse Status</button>
-            <button id="tab-graph2" class="graph-tab" style="padding:10px 24px; border:none; background:#ecf0f1; color:#2c3e50; border-radius:6px 6px 0 0; font-weight:600; cursor:pointer;">Yearly Graph</button>
-        </div>
-
-        <!-- Graph 1: Donut Chart -->
-        <div class="chart-container" id="graph1-container">
-            <h3 style="text-align:center;">Warehouse Status</h3>
-            <canvas id="donutChart" height="220"></canvas>
-            <div style="display:flex; justify-content:center; margin-top:1.5rem; gap:2rem;">
-                <div style="display:flex; align-items:center;"><span style="display:inline-block;width:18px;height:18px;background:#3b82f6;border-radius:4px;margin-right:8px;"></span> <span style="font-weight:600; color:#3b82f6;">Current Stock</span></div>
-                <div style="display:flex; align-items:center;"><span style="display:inline-block;width:18px;height:18px;background:#fbbc04;border-radius:4px;margin-right:8px;"></span> <span style="font-weight:600; color:#fbbc04;">Stock Expected to Arrive</span></div>
-                <div style="display:flex; align-items:center;"><span style="display:inline-block;width:18px;height:18px;background:#10b981;border-radius:4px;margin-right:8px;"></span> <span style="font-weight:600; color:#10b981;">Available Stock Capacity</span></div>
+        <!-- Stats Overview -->
+        <div class="stats-overview">
+            <div class="stat-card">
+                <div class="stat-header">
+                    <i class="fas fa-boxes"></i>
+                    <h4>Warehouse Capacity</h4>
+                </div>
+                <div class="stat-content">
+                    <div class="stat-value"><?php echo number_format($cap['warehouse_capacity']); ?></div>
+                    <div class="stat-label">Total Capacity (bags)</div>
+                </div>
+                <div class="stat-trend">
+                    <i class="fas fa-arrows-alt-h"></i>
+                    <span>Maximum storage</span>
+                </div>
             </div>
-            <div id="donut-center-label" style="position:absolute;left:0;right:0;top:50%;transform:translateY(-50%);text-align:center;font-size:2.2rem;font-weight:700;color:#e74c3c;"></div>
+            
+            <div class="stat-card">
+                <div class="stat-header">
+                    <i class="fas fa-pallet"></i>
+                    <h4>Current Inventory</h4>
+                </div>
+                <div class="stat-content">
+                    <div class="stat-value"><?php echo number_format($cap['inventory']); ?></div>
+                    <div class="stat-label">Bags in Stock</div>
+                </div>
+                <div class="stat-trend">
+                    <div class="progress-bar-small">
+                        <div class="progress-fill" style="width: <?php echo $capacity_percentage; ?>%"></div>
+                    </div>
+                    <span><?php echo round($capacity_percentage, 1); ?>% full</span>
+                </div>
+            </div>
+            
+            <div class="stat-card">
+                <div class="stat-header">
+                    <i class="fas fa-truck-loading"></i>
+                    <h4>Available Capacity</h4>
+                </div>
+                <div class="stat-content">
+                    <div class="stat-value"><?php echo number_format($available_capacity); ?></div>
+                    <div class="stat-label">Bags Available</div>
+                </div>
+                <div class="stat-trend positive">
+                    <i class="fas fa-arrow-up"></i>
+                    <span>Ready for delivery</span>
+                </div>
+            </div>
+            
+            <div class="stat-card">
+                <div class="stat-header">
+                    <i class="fas fa-calendar-day"></i>
+                    <h4>Branch Appointments</h4>
+                </div>
+                <div class="stat-content">
+                    <div class="stat-value"><?php echo $today_stats ? $today_stats['count'] : 0; ?></div>
+                    <div class="stat-label">
+                        <span class="status-dot pending"></span> <?php echo $today_stats ? $today_stats['pending'] : 0; ?> pending
+                        <span class="status-dot confirmed"></span> <?php echo $today_stats ? $today_stats['confirmed'] : 0; ?> confirmed
+                    </div>
+                </div>
+                <div class="stat-trend">
+                    <a href="operator.php?date=<?php echo $today; ?>" class="view-details">
+                        <i class="fas fa-external-link-alt"></i> View Today
+                    </a>
+                </div>
+            </div>
         </div>
 
-        <!-- Graph 2: Yearly Bar Chart (existing) -->
-        <div class="chart-container" id="graph2-container" style="display:none;">
-            <h3>Current Stock vs Available Capacity (2025)</h3>
-            <canvas id="stockChart" height="100"></canvas>
+        <!-- Main Dashboard Content -->
+        <div class="dashboard-grid">
+            <!-- Left Column: Charts -->
+            <div class="dashboard-left">
+                <!-- Capacity Visualization -->
+                <div class="dashboard-card">
+                    <div class="card-header">
+                        <h3><i class="fas fa-chart-pie"></i> Warehouse Status</h3>
+                        <div class="card-actions">
+                            <button class="chart-toggle active" data-chart="pie">
+                                <i class="fas fa-chart-pie"></i>
+                            </button>
+                            <button class="chart-toggle" data-chart="donut">
+                                <i class="fas fa-donate"></i>
+                            </button>
+                            <button class="chart-toggle" data-chart="gauge">
+                                <i class="fas fa-tachometer-alt"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <div class="chart-container" id="capacity-chart-container">
+                            <canvas id="capacityChart" height="250"></canvas>
+                        </div>
+                        <div class="chart-legend">
+                            <div class="legend-item">
+                                <span class="legend-color inventory"></span>
+                                <span class="legend-label">Current Inventory</span>
+                                <span class="legend-value"><?php echo number_format($cap['inventory']); ?> bags</span>
+                            </div>
+                            <div class="legend-item">
+                                <span class="legend-color available"></span>
+                                <span class="legend-label">Available Capacity</span>
+                                <span class="legend-value"><?php echo number_format($available_capacity); ?> bags</span>
+                            </div>
+                            <div class="legend-item">
+                                <span class="legend-color total"></span>
+                                <span class="legend-label">Total Capacity</span>
+                                <span class="legend-value"><?php echo number_format($cap['warehouse_capacity']); ?> bags</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Weekly Activity -->
+                <div class="dashboard-card">
+                    <div class="card-header">
+                        <h3><i class="fas fa-chart-line"></i> Weekly Activity</h3>
+                        <div class="period-selector">
+                            <select id="periodSelect">
+                                <option value="7">Last 7 Days</option>
+                                <option value="14">Last 14 Days</option>
+                                <option value="30">Last 30 Days</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <div class="chart-container">
+                            <canvas id="activityChart" height="200"></canvas>
+                        </div>
+                        <div class="chart-summary">
+                            <div class="summary-item">
+                                <span class="summary-label">Total Appointments</span>
+                                <span class="summary-value"><?php echo array_sum($week_counts); ?></span>
+                            </div>
+                            <div class="summary-item">
+                                <span class="summary-label">Total Volume</span>
+                                <span class="summary-value"><?php echo number_format(array_sum($week_volumes)); ?> bags</span>
+                            </div>
+                            <div class="summary-item">
+                                <span class="summary-label">Avg. per Day</span>
+                                <span class="summary-value"><?php echo round(array_sum($week_counts) / 7, 1); ?></span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Right Column: Appointments & Farmers -->
+            <div class="dashboard-right">
+                <!-- Today's Schedule -->
+                <div class="dashboard-card">
+                    <div class="card-header">
+                        <h3><i class="fas fa-calendar-day"></i> Today's Schedule</h3>
+                        <span class="date-badge"><?php echo date('F j, Y'); ?></span>
+                    </div>
+                    <div class="card-body">
+                        <?php
+                        $today_appointments_stmt = $pdo->prepare("SELECT a.appointment_id, a.first_name, a.last_name, a.time_slot, a.volume, a.status
+                            FROM appointments a 
+                            WHERE a.branch_id = ? AND a.date = ? AND a.status != 'cancelled'
+                            ORDER BY FIELD(a.time_slot, 'AM', 'PM'), a.appointment_id");
+                        $today_appointments_stmt->execute([$branch_id, $today]);
+                        $today_appointments = $today_appointments_stmt->fetchAll(PDO::FETCH_ASSOC);
+                        ?>
+                        
+                        <?php if (count($today_appointments) > 0): ?>
+                            <div class="schedule-list">
+                                <?php foreach ($today_appointments as $appt): ?>
+                                    <div class="schedule-item">
+                                        <div class="schedule-time">
+                                            <div class="time-slot-badge <?php echo $appt['time_slot'] == 'AM' ? 'morning' : 'afternoon'; ?>">
+                                                <?php echo $appt['time_slot'] == 'AM' ? 'AM' : 'PM'; ?>
+                                            </div>
+                                            <div class="time-display">
+                                                <?php echo $appt['time_slot'] == 'AM' ? '8:00 AM' : '1:00 PM'; ?>
+                                            </div>
+                                        </div>
+                                        <div class="schedule-details">
+                                            <div class="farmer-name">
+                                                <?php echo htmlspecialchars($appt['first_name'] . ' ' . $appt['last_name']); ?>
+                                            </div>
+                                            <div class="appointment-meta">
+                                                <span class="volume-indicator">
+                                                    <i class="fas fa-weight-hanging"></i> <?php echo number_format($appt['volume']); ?> bags
+                                                </span>
+                                                <span class="status-indicator <?php echo $appt['status']; ?>">
+                                                    <?php echo ucfirst($appt['status']); ?>
+                                                </span>
+                                            </div>
+                                        </div>
+                                        <div class="schedule-actions">
+                                            <button class="action-btn small" onclick="viewAppointment(<?php echo $appt['appointment_id']; ?>)">
+                                                <i class="fas fa-eye"></i>
+                                            </button>
+                                            <?php if ($appt['status'] == 'pending'): ?>
+                                                <button class="action-btn small confirm" onclick="confirmAppointment(<?php echo $appt['appointment_id']; ?>)">
+                                                    <i class="fas fa-check"></i>
+                                                </button>
+                                            <?php endif; ?>
+                                        </div>
+                                    </div>
+                                <?php endforeach; ?>
+                            </div>
+                        <?php else: ?>
+                            <div class="empty-state">
+                                <i class="fas fa-calendar-times"></i>
+                                <p>No appointments scheduled for today</p>
+                                <a href="operator.php" class="btn-outline">
+                                    <i class="fas fa-plus"></i> View All Appointments
+                                </a>
+                            </div>
+                        <?php endif; ?>
+                        
+                        <div class="card-footer">
+                            <a href="operator.php" class="view-all-link">
+                                <i class="fas fa-list"></i> View All Appointments
+                            </a>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Top Farmers -->
+                <div class="dashboard-card">
+                    <div class="card-header">
+                        <h3><i class="fas fa-crown"></i> Top Farmers</h3>
+                        <span class="period-label">This Month</span>
+                    </div>
+                    <div class="card-body">
+                        <?php if (count($top_farmers) > 0): ?>
+                            <div class="top-farmers-list">
+                                <?php $rank = 1; ?>
+                                <?php foreach ($top_farmers as $farmer): ?>
+                                    <div class="farmer-rank-item">
+                                        <div class="rank-number"><?php echo $rank; ?></div>
+                                        <div class="farmer-avatar">
+                                            <i class="fas fa-user-circle"></i>
+                                        </div>
+                                        <div class="farmer-info">
+                                            <div class="farmer-name">
+                                                <?php echo htmlspecialchars($farmer['first_name'] . ' ' . $farmer['last_name']); ?>
+                                            </div>
+                                            <div class="farmer-id">
+                                                ID: <?php echo htmlspecialchars($farmer['farmer_id']); ?>
+                                            </div>
+                                        </div>
+                                        <div class="farmer-volume">
+                                            <i class="fas fa-weight-hanging"></i>
+                                            <span class="volume-value"><?php echo number_format($farmer['total_volume']); ?></span>
+                                            <span class="volume-label">bags</span>
+                                        </div>
+                                    </div>
+                                    <?php $rank++; ?>
+                                <?php endforeach; ?>
+                            </div>
+                        <?php else: ?>
+                            <div class="empty-state">
+                                <i class="fas fa-users"></i>
+                                <p>No farmer data available</p>
+                            </div>
+                        <?php endif; ?>
+                        
+                        <div class="card-footer">
+                            <a href="farmers.php" class="view-all-link">
+                                <i class="fas fa-chart-bar"></i> View Farmer Analytics
+                            </a>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Quick Actions -->
+                <div class="dashboard-card">
+                    <div class="card-header">
+                        <h3><i class="fas fa-bolt"></i> Quick Actions</h3>
+                    </div>
+                    <div class="card-body">
+                        <div class="quick-actions-grid">
+                            <a href="operator.php" class="quick-action pending">
+                                <i class="fas fa-clock"></i>
+                                <span>Pending Approvals</span>
+                                <?php if ($new_count > 0): ?>
+                                    <span class="badge"><?php echo $new_count; ?></span>
+                                <?php endif; ?>
+                            </a>
+                            <a href="capacity_management.php" class="quick-action capacity">
+                                <i class="fas fa-warehouse"></i>
+                                <span>Update Capacity</span>
+                            </a>
+                            <a href="reports.php?type=daily" class="quick-action reports">
+                                <i class="fas fa-file-alt"></i>
+                                <span>Daily Report</span>
+                            </a>
+                            <a href="operator.php" class="quick-action add">
+                                <i class="fas fa-plus-circle"></i>
+                                <span>Add Appointment</span>
+                            </a>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- System Status -->
+        <div class="system-status">
+            <div class="status-card">
+                <div class="status-header">
+                    <i class="fas fa-server"></i>
+                    <h4>System Status</h4>
+                </div>
+                <div class="status-list">
+                    <div class="status-item online">
+                        <i class="fas fa-circle"></i>
+                        <span>Database Connection</span>
+                        <span class="status-text">Online</span>
+                    </div>
+                    <div class="status-item online">
+                        <i class="fas fa-circle"></i>
+                        <span>Appointment System</span>
+                        <span class="status-text">Active</span>
+                    </div>
+                    <div class="status-item online">
+                        <i class="fas fa-circle"></i>
+                        <span>Capacity Management</span>
+                        <span class="status-text">Ready</span>
+                    </div>
+                    <div class="status-item online">
+                        <i class="fas fa-circle"></i>
+                        <span>Report Generation</span>
+                        <span class="status-text">Available</span>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="last-update">
+                <p><i class="fas fa-sync-alt"></i> Last updated: <?php echo date('h:i:s A'); ?></p>
+                <button class="refresh-btn" onclick="location.reload()">
+                    <i class="fas fa-redo"></i> Refresh Dashboard
+                </button>
+            </div>
         </div>
     </div>
 
+    <!-- JavaScript Libraries -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-gauge@0.3.0/dist/chartjs-gauge.min.js"></script>
+    
+    <!-- Global data for JS -->
     <script>
-        // Toggle notification panel only when clicking the bell icon
-        function toggleNotifs() {
-            const dropdown = document.getElementById('notifDropdown');
-            dropdown.style.display = dropdown.style.display === 'block' ? 'none' : 'block';
-        }
-
-        document.addEventListener('DOMContentLoaded', function() {
-            const notifDropdown = document.getElementById('notifDropdown');
-            const notifWrapper = document.getElementById('notifWrapper');
-            // Open/close panel only when clicking the bell icon
-            notifWrapper.addEventListener('click', function(e) {
-                if (e.target.closest('.fa-bell')) {
-                    toggleNotifs();
-                }
-            });
-            // Only close when clicking outside the bell and dropdown
-            document.addEventListener('click', function(e) {
-                if (
-                    notifDropdown.style.display === 'block' &&
-                    !notifDropdown.contains(e.target) &&
-                    !notifWrapper.contains(e.target)
-                ) {
-                    notifDropdown.style.display = 'none';
-                }
-            });
-            // Prevent notification panel from closing when clicking Mark as Read/Unread or See All/See Less
-            notifDropdown.addEventListener('click', function(e) {
-                if (e.target.classList.contains('action-btn') || e.target.id === 'seeAllBtn' || e.target.id === 'seeLessBtn') {
-                    e.stopPropagation();
-                }
-            });
-            // Use event delegation for Mark as Read/Unread buttons
-            const notifList = document.getElementById('notifList');
-            if (notifList) {
-                notifList.addEventListener('click', function(e) {
-                    if (e.target && e.target.classList.contains('action-btn')) {
-                        toggleRead(e.target);
-                        e.stopPropagation();
-                    }
-                });
-            }
-
-            // --- Graph Tab Switching ---
-            const tab1 = document.getElementById('tab-graph1');
-            const tab2 = document.getElementById('tab-graph2');
-            const graph1 = document.getElementById('graph1-container');
-            const graph2 = document.getElementById('graph2-container');
-            tab1.addEventListener('click', function() {
-                tab1.classList.add('active');
-                tab1.style.background = '#3498db';
-                tab1.style.color = 'white';
-                tab2.classList.remove('active');
-                tab2.style.background = '#ecf0f1';
-                tab2.style.color = '#2c3e50';
-                graph1.style.display = '';
-                graph2.style.display = 'none';
-            });
-            tab2.addEventListener('click', function() {
-                tab2.classList.add('active');
-                tab2.style.background = '#3498db';
-                tab2.style.color = 'white';
-                tab1.classList.remove('active');
-                tab1.style.background = '#ecf0f1';
-                tab1.style.color = '#2c3e50';
-                graph1.style.display = 'none';
-                graph2.style.display = '';
-            });
-
-            // --- Donut Chart (Graph 1) ---
-            const donutCtx = document.getElementById('donutChart').getContext('2d');
-            // PHP values for chart
-            const warehouseCapacity = <?php echo (float)$cap['warehouse_capacity']; ?>;
-            const inventory = <?php echo (float)$cap['inventory']; ?>;
-            // For demo, expectedArrive is 20% of capacity (customize as needed)
-            const expectedArrive = Math.round(warehouseCapacity * 0.2);
-            const available = Math.max(warehouseCapacity - inventory - expectedArrive, 0);
-            const currentStockPercent = warehouseCapacity > 0 ? (inventory / warehouseCapacity) * 100 : 0;
-            const expectedArrivePercent = warehouseCapacity > 0 ? (expectedArrive / warehouseCapacity) * 100 : 0;
-            const availablePercent = warehouseCapacity > 0 ? (available / warehouseCapacity) * 100 : 0;
-            const donutData = [inventory, expectedArrive, available];
-            const donutColors = ['#3b82f6', '#fbbc04', '#10b981'];
-            const donutChart = new Chart(donutCtx, {
-                type: 'doughnut',
-                data: {
-                    labels: ['Current Stock', 'Stock Expected to Arrive', 'Available Stock Capacity'],
-                    datasets: [{
-                        data: donutData,
-                        backgroundColor: donutColors,
-                        borderWidth: 3,
-                        borderColor: '#fff',
-                        hoverOffset: 8
-                    }]
-                },
-                options: {
-                    cutout: '70%',
-                    plugins: {
-                        legend: { display: false },
-                        tooltip: {
-                            callbacks: {
-                                label: function(context) {
-                                    let label = context.label || '';
-                                    let value = context.raw;
-                                    let percent = 0;
-                                    if (context.dataset && context.dataset.data) {
-                                        let total = context.dataset.data.reduce((a, b) => a + b, 0);
-                                        percent = total > 0 ? (value / total * 100) : 0;
-                                    }
-                                    return `${label}: ${value} (${percent.toFixed(1)}%)`;
-                                }
-                            }
-                        }
-                    }
-                }
-            });
-            // Center label for donut chart
-            function updateDonutCenter() {
-                const center = document.getElementById('donut-center-label');
-                center.innerHTML = `<div style='font-size:1.2rem;color:#222;'>Available Capacity:</div><div style='font-size:2.5rem;font-weight:700;color:#e74c3c;'>${availablePercent.toFixed(0)}%</div>`;
-            }
-            updateDonutCenter();
-
-            // --- Yearly Bar Chart (Graph 2, existing) ---
-            const ctx = document.getElementById('stockChart').getContext('2d');
-            new Chart(ctx, {
-                type: 'bar',
-                data: {
-                    labels: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'],
-                    datasets: [{
-                        label: 'Current Stock',
-                        data: [2000, 2500, 3000, 4500, 2800, 3200, 3500, 4000, 4200, 4800, <?php echo $cap['inventory']; ?>, 0],
-                        backgroundColor: '#3498db'
-                    }, {
-                        label: 'Available Capacity',
-                        data: [8000, 7500, 7000, 5500, 7200, 6800, 6500, 6000, 5800, 5200, <?php echo ($cap['warehouse_capacity'] - $cap['inventory']); ?>, 10000],
-                        backgroundColor: '#2ecc71'
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    plugins: { legend: { position: 'top' } },
-                    scales: { y: { beginAtZero: true, title: { display: true, text: 'Volume (Bags)' } } }
-                }
-            });
-        });
-
-        function toggleRead(btn) {
-            // 1. Find the parent notification container
-            const item = btn.closest('.notif-item');
-            if (!item) return; // Safety check
-
-            const appointmentId = item.getAttribute('data-appointment-id');
-
-            // Check current UI state: if it has 'unread' class, it is currently unread (is_read = 0)
-            const isCurrentlyUnread = item.classList.contains('unread');
-
-            // Determine the NEW state to send to DB
-            // If it WAS unread, we want to mark it as read (1).
-            const newStateIsRead = isCurrentlyUnread ? 1 : 0;
-
-            // 2. REAL-TIME UI UPDATE (Immediate)
-            if (newStateIsRead === 1) {
-                item.classList.remove('unread'); // Remove the blue/highlight background
-                btn.textContent = 'Mark as Unread';
-                updateNotifCount(-1); // Decrease the red badge number
-            } else {
-                item.classList.add('unread'); // Re-add the highlight
-                btn.textContent = 'Mark as Read';
-                updateNotifCount(1); // Increase the red badge number
-            }
-
-            // 3. DATABASE SYNC
-            fetch('php_helper/api.php?action=updateNotification', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    appointment_id: appointmentId,
-                    is_read: newStateIsRead
-                })
-            })
-            .then(r => r.json())
-            .then(data => {
-                if (!data.success) {
-                    // Revert UI if the server failed
-                    // Revert the UI changes
-                    if (newStateIsRead === 1) {
-                        item.classList.add('unread');
-                        btn.textContent = 'Mark as Read';
-                        updateNotifCount(1);
-                    } else {
-                        item.classList.remove('unread');
-                        btn.textContent = 'Mark as Unread';
-                        updateNotifCount(-1);
-                    }
-                    alert('Failed to update database. Reverting UI.');
-                }
-            })
-            .catch(err => {
-                // Revert UI on error
-                if (newStateIsRead === 1) {
-                    item.classList.add('unread');
-                    btn.textContent = 'Mark as Read';
-                    updateNotifCount(1);
-                } else {
-                    item.classList.remove('unread');
-                    btn.textContent = 'Mark as Unread';
-                    updateNotifCount(-1);
-                }
-                console.error('Network Error:', err);
-                alert('Connection error. Could not reach the server.');
-            });
-        }
-
-        function updateNotifCount(delta) {
-            let badge = document.querySelector('.notif-badge');
-            const wrapper = document.querySelector('.notif-wrapper');
-            
-            if (badge) {
-                let currentCount = parseInt(badge.textContent) || 0;
-                let newCount = currentCount + delta;
-                
-                if (newCount <= 0) {
-                    badge.remove(); // Remove badge if 0
-                } else {
-                    badge.textContent = newCount;
-                }
-            } else if (delta > 0) {
-                // Create badge if it was at 0
-                const newBadge = document.createElement('span');
-                newBadge.className = 'notif-badge';
-                newBadge.textContent = delta;
-                wrapper.appendChild(newBadge);
-            }
-        }
-
-        function toggleNotifView(showAll) {
-            const notifItems = document.querySelectorAll('#notifList .notif-item');
-            const seeAllBtn = document.getElementById('seeAllBtn');
-            const seeLessBtn = document.getElementById('seeLessBtn');
-            notifItems.forEach((item, idx) => {
-                item.style.display = (showAll || idx < 5) ? '' : 'none';
-            });
-            if (showAll) {
-                seeAllBtn.style.display = 'none';
-                seeLessBtn.style.display = '';
-            } else {
-                seeAllBtn.style.display = '';
-                seeLessBtn.style.display = 'none';
-            }
-        }
+        window.userId = <?php echo json_encode((int)($user_id ?? 0)); ?>;
+        window.branchId = <?php echo json_encode((int)$branch_id); ?>;
     </script>
+
+    <!-- JavaScript -->
+    <script src="js/processor.js"></script>
 </body>
 </html>
