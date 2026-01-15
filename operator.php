@@ -117,6 +117,12 @@ if ($nextMonth > 12) {
 
 $monthName = date('F', strtotime($firstOfMonth));
 $today = date('Y-m-d');
+
+// Notifications (same behavior as processor dashboard)
+$notif_stmt = $pdo->prepare("SELECT appointment_id, first_name, last_name, status, date, time_slot, volume, is_read FROM appointments WHERE branch_id = ? AND status IN ('pending', 'cancelled') ORDER BY appointment_id DESC LIMIT 10");
+$notif_stmt->execute([$branch_id]);
+$notifications = $notif_stmt->fetchAll(PDO::FETCH_ASSOC);
+$new_count = count(array_filter($notifications, fn($n) => (empty($n['is_read']) || $n['is_read'] == 0)));
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -162,6 +168,81 @@ $today = date('Y-m-d');
             </div>
         </div>
         <div class="user-actions">
+            <div class="notif-wrapper" id="notifWrapper">
+                <div class="notif-icon">
+                    <i class="fas fa-bell"></i>
+                    <?php if ($new_count > 0): ?>
+                        <span class="notif-badge pulse"><?php echo $new_count; ?></span>
+                    <?php endif; ?>
+                </div>
+                <div class="notif-dropdown" id="notifDropdown">
+                    <div class="notif-header">
+                        <h4><i class="fas fa-bell"></i> Notifications</h4>
+                        <?php if ($new_count > 0): ?>
+                            <button class="mark-all-read" id="markAllRead">
+                                <i class="fas fa-check-double"></i> Mark All Read
+                            </button>
+                        <?php endif; ?>
+                    </div>
+                    <div class="notif-list" id="notifList">
+                        <?php if (count($notifications) > 0): ?>
+                            <?php foreach ($notifications as $n):
+                                $unread = (empty($n['is_read']) || $n['is_read'] == 0);
+                                $status_class = $n['status'] == 'pending' ? 'status-pending' : 'status-cancelled';
+                                $time_label = $n['time_slot'] == 'AM' ? 'Morning' : 'Afternoon';
+                            ?>
+                                <a class="notif-item <?php echo $unread ? 'unread' : ''; ?>"
+                                   href="operator.php?view=<?php echo (int)$n['appointment_id']; ?>"
+                                   data-appointment-id="<?php echo (int)$n['appointment_id']; ?>"
+                                   data-is-read="<?php echo $unread ? '0' : '1'; ?>">
+                                    <div class="notif-icon-small">
+                                        <?php if ($n['status'] == 'pending'): ?>
+                                            <i class="fas fa-clock status-pending"></i>
+                                        <?php else: ?>
+                                            <i class="fas fa-times-circle status-cancelled"></i>
+                                        <?php endif; ?>
+                                    </div>
+                                    <div class="notif-content">
+                                        <div class="notif-title">
+                                            <?php echo $n['status'] == 'pending' ? 'New Appointment' : 'Cancellation'; ?>
+                                            <span class="notif-time"><?php echo date('M d', strtotime($n['date'])); ?> (<?php echo $time_label; ?>)</span>
+                                        </div>
+                                        <div class="notif-details">
+                                            <strong><?php echo htmlspecialchars($n['first_name'] . ' ' . $n['last_name']); ?></strong>
+                                            for <?php echo date('M d', strtotime($n['date'])); ?> (<?php echo $time_label; ?>)
+                                        </div>
+                                        <div class="notif-meta">
+                                            <span class="volume-badge">
+                                                <i class="fas fa-weight-hanging"></i> <?php echo number_format($n['volume']); ?> bags
+                                            </span>
+                                            <span class="status-badge <?php echo $status_class; ?>">
+                                                <?php echo ucfirst($n['status']); ?>
+                                            </span>
+                                        </div>
+                                    </div>
+                                    <div class="notif-actions">
+                                        <label class="notif-check" title="Mark as <?php echo $unread ? 'Read' : 'Unread'; ?>">
+                                            <input class="notif-checkbox" type="checkbox" <?php echo $unread ? '' : 'checked'; ?> aria-label="Toggle read status">
+                                            <span class="notif-check-ui" aria-hidden="true"></span>
+                                        </label>
+                                    </div>
+                                </a>
+                            <?php endforeach; ?>
+                        <?php else: ?>
+                            <div class="no-notifications">
+                                <i class="fas fa-check-circle"></i>
+                                <p>No new notifications</p>
+                            </div>
+                        <?php endif; ?>
+                    </div>
+                    <div class="notif-footer">
+                        <a href="operator.php" class="view-all">
+                            <i class="fas fa-list"></i> View All Appointments
+                        </a>
+                    </div>
+                </div>
+            </div>
+
             <div class="user-profile">
                 <div class="user-avatar">
                     <?php echo htmlspecialchars($initials); ?>
@@ -169,6 +250,30 @@ $today = date('Y-m-d');
                 <div class="user-info">
                     <span class="user-name"><?php echo htmlspecialchars($first_name . ' ' . $last_name); ?></span>
                     <span class="user-role">Processor</span>
+                </div>
+                <div class="user-dropdown" id="userDropdown">
+                    <div class="user-dropdown-header">
+                        <div class="user-dropdown-avatar">
+                            <?php echo htmlspecialchars($initials); ?>
+                        </div>
+                        <div class="user-dropdown-info">
+                            <strong><?php echo htmlspecialchars($first_name . ' ' . $last_name); ?></strong>
+                            <small><?php echo htmlspecialchars($user_email); ?></small>
+                            <div class="user-role-badge">Processor</div>
+                        </div>
+                    </div>
+                    <div class="user-dropdown-menu">
+                        <a href="profile.php" class="dropdown-item">
+                            <i class="fas fa-user-cog"></i> My Profile
+                        </a>
+                        <a href="settings.php" class="dropdown-item">
+                            <i class="fas fa-cog"></i> Settings
+                        </a>
+                        <div class="dropdown-divider"></div>
+                        <a href="login.php" class="dropdown-item logout">
+                            <i class="fas fa-sign-out-alt"></i> Logout
+                        </a>
+                    </div>
                 </div>
             </div>
         </div>
@@ -409,8 +514,10 @@ $today = date('Y-m-d');
     </div>
 
     <script>
+        window.userId = <?php echo json_encode((int)($user_id ?? 0)); ?>;
         window.branchId = <?php echo json_encode((int)$branch_id); ?>;
     </script>
+    <script src="js/processor.js?v=<?php echo urlencode((string)@filemtime(__DIR__ . '/js/processor.js')); ?>"></script>
     <script src="js/operator.js?v=<?php echo urlencode((string)@filemtime(__DIR__ . '/js/operator.js')); ?>"></script>
 </body>
 </html>

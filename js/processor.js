@@ -1,25 +1,31 @@
 // Enhanced Processor Dashboard JavaScript
 document.addEventListener('DOMContentLoaded', function() {
+    // Always initialize top navigation + notifications (shared across pages)
+    initNavigation();
+    initNotifications();
+
+    // Charts only exist on the dashboard page
+    const chartDataEl = document.getElementById('chart-data-store');
+    if (!chartDataEl || !window.Chart || !window.ChartDataLabels) {
+        return;
+    }
+
     // Register Chart.js plugins
     Chart.register(ChartDataLabels);
-    
+
     // Get data from PHP
-    const chartDataEl = document.getElementById('chart-data-store');
     const warehouseCapacity = parseFloat(chartDataEl.dataset.capacity);
     const inventory = parseFloat(chartDataEl.dataset.inventory);
     const available = parseFloat(chartDataEl.dataset.available);
     const capacityPercentage = parseFloat(chartDataEl.dataset.percentage);
-    
+
     const weekDays = JSON.parse(chartDataEl.dataset.weekDays);
     const weekCounts = JSON.parse(chartDataEl.dataset.weekCounts);
     const weekVolumes = JSON.parse(chartDataEl.dataset.weekVolumes);
-    
-    // Initialize UI Components
-    initNavigation();
-    initNotifications();
+
     initCharts(warehouseCapacity, inventory, available, capacityPercentage, weekDays, weekCounts, weekVolumes);
     initDashboardInteractions();
-    
+
     // Auto-refresh data every 5 minutes
     setInterval(refreshDashboardData, 5 * 60 * 1000);
 });
@@ -77,66 +83,95 @@ function initNavigation() {
 // Notification Management
 function initNotifications() {
     const markAllReadBtn = document.getElementById('markAllRead');
-    const markReadButtons = document.querySelectorAll('.mark-read-btn');
     const notifItems = document.querySelectorAll('.notif-item');
+    const notifCheckboxes = document.querySelectorAll('.notif-checkbox');
     
     // Mark all as read
     if (markAllReadBtn) {
-        markAllReadBtn.addEventListener('click', function() {
+        markAllReadBtn.addEventListener('click', function(e) {
+            e.preventDefault();
             const unreadItems = document.querySelectorAll('.notif-item.unread');
-            
+
             unreadItems.forEach(item => {
                 const appointmentId = item.getAttribute('data-appointment-id');
-                const btn = item.querySelector('.mark-read-btn');
-                
-                // Update UI
+                const cb = item.querySelector('.notif-checkbox');
+
                 item.classList.remove('unread');
-                if (btn) {
-                    btn.innerHTML = '<i class="fas fa-circle"></i>';
-                    btn.title = 'Mark as Unread';
+                item.dataset.isRead = '1';
+                if (cb) {
+                    cb.checked = true;
                 }
-                
-                // Update server
+
                 updateNotificationStatus(appointmentId, 1);
             });
-            
-            // Update badge count
+
             updateNotifCount(-unreadItems.length);
-            
-            // Show success message
-            showToast('All notifications marked as read', 'success');
+            if (typeof showToast === 'function') {
+                showToast('All notifications marked as read', 'success');
+            }
         });
     }
-    
-    // Individual mark as read
-    markReadButtons.forEach(btn => {
-        btn.addEventListener('click', function() {
+
+    // Checkbox read/unread toggle (must NOT navigate)
+    notifCheckboxes.forEach(cb => {
+        cb.addEventListener('click', function(e) {
+            // Let the checkbox toggle normally, but prevent the parent <a> from navigating
+            e.stopPropagation();
+        });
+        cb.addEventListener('change', function(e) {
+            e.stopPropagation();
+
             const item = this.closest('.notif-item');
+            if (!item) return;
+
             const appointmentId = item.getAttribute('data-appointment-id');
-            const isUnread = item.classList.contains('unread');
-            
-            // Toggle state
-            if (isUnread) {
-                item.classList.remove('unread');
-                this.innerHTML = '<i class="fas fa-circle"></i>';
-                this.title = 'Mark as Unread';
-                updateNotificationStatus(appointmentId, 1);
+            const isRead = this.checked ? 1 : 0;
+            const wasUnread = item.classList.contains('unread');
+
+            item.classList.toggle('unread', isRead === 0);
+            item.dataset.isRead = String(isRead);
+
+            updateNotificationStatus(appointmentId, isRead);
+
+            // Update badge count
+            if (wasUnread && isRead === 1) {
                 updateNotifCount(-1);
-            } else {
-                item.classList.add('unread');
-                this.innerHTML = '<i class="fas fa-check-circle"></i>';
-                this.title = 'Mark as Read';
-                updateNotificationStatus(appointmentId, 0);
+            } else if (!wasUnread && isRead === 0) {
                 updateNotifCount(1);
             }
         });
     });
     
-    // Notification item click - view appointment
+    // Notification item click - open appointment page; if unread, auto-mark read
     notifItems.forEach(item => {
         item.addEventListener('click', function(e) {
-            if (!e.target.closest('.mark-read-btn') && !e.target.closest('.action-btn')) {
-                const appointmentId = this.getAttribute('data-appointment-id');
+            // If clicking checkbox area, do nothing (checkbox handler handles it)
+            if (e.target.closest('.notif-check') || e.target.closest('.notif-checkbox')) {
+                return;
+            }
+
+            e.preventDefault();
+
+            const appointmentId = this.getAttribute('data-appointment-id');
+            const isUnread = this.classList.contains('unread');
+            const href = this.getAttribute('href');
+
+            if (isUnread) {
+                // Update UI immediately
+                this.classList.remove('unread');
+                this.dataset.isRead = '1';
+                const cb = this.querySelector('.notif-checkbox');
+                if (cb) {
+                    cb.checked = true;
+                }
+                updateNotificationStatus(appointmentId, 1);
+                updateNotifCount(-1);
+            }
+
+            // Navigate to the target page
+            if (href) {
+                window.location.href = href;
+            } else if (typeof viewAppointment === 'function') {
                 viewAppointment(appointmentId);
             }
         });

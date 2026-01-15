@@ -6,6 +6,7 @@
     <title>NFA Appointment System - Welcome</title>
     <link rel="icon" href="img/nfa-logo.png" type="image/png"/>
     <link rel="stylesheet" href="css/login.css"> 
+    <link rel="stylesheet" href="css/legal_modal.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 </head>
 <body class="landing-body">
@@ -87,45 +88,146 @@
                 <i class="fas fa-phone"></i>
                 <div>
                     <h4>Need Help?</h4>
-                    <p>Contact us at (02) 8929-6701</p>
+                    <p>Contact us at 09171139347</p>
                 </div>
             </div>
             <div class="info-card">
                 <i class="fas fa-info-circle"></i>
                 <div>
                     <h4>System Info</h4>
-                    <p>Version 2.1 • Updated March 2023</p>
+                    <p>Version 1.0 • Updated January 2026</p>
                 </div>
             </div>
         </div>
         
-        <!-- Language selector -->
-        <div class="language-selector">
-            <span class="language-label"><i class="fas fa-globe"></i> Language:</span>
-            <select id="languageSelect">
-                <option value="en" selected>English</option>
-                <option value="fil">Filipino</option>
-            </select>
-        </div>
-        
         <!-- Footer -->
         <div class="footer">
-            <p class="copyright">© 2023 National Food Authority. All rights reserved.</p>
+            <p class="copyright">© 2026 National Food Authority. All rights reserved.</p>
             <p class="note">This system is designed to streamline farmer appointment processes.</p>
             <div class="footer-links">
-                <a href="#"><i class="fas fa-shield-alt"></i> Privacy Policy</a>
-                <a href="#"><i class="fas fa-file-alt"></i> Terms of Use</a>
-                <a href="#"><i class="fas fa-question-circle"></i> Help Center</a>
+                <a id="privacyPolicyLink" data-legal-modal="privacy" href="#"><i class="fas fa-shield-alt"></i> Privacy Policy</a>
+                <a id="termsOfUseLink" data-legal-modal="terms" href="#"><i class="fas fa-file-alt"></i> Terms of Use</a>
+                <a id="helpCenterLink" data-legal-modal="help" href="#"><i class="fas fa-question-circle"></i> Help Center</a>
             </div>
         </div>
     </div>
-    
-    <!-- Notification toast -->
-    <div class="toast" id="languageToast">
-        <span>Language changed to English</span>
-        <button class="toast-close"><i class="fas fa-times"></i></button>
+
+    <!-- Legal / Help Pop-up Modal (JS-enhanced; links fallback to dedicated pages) -->
+    <div class="legal-modal-backdrop" id="legalModalBackdrop" hidden>
+        <div class="legal-modal" role="dialog" aria-modal="true" aria-labelledby="legalModalTitle">
+            <div class="legal-modal-header">
+                <h2 class="legal-modal-title" id="legalModalTitle">Details</h2>
+                <button type="button" class="legal-modal-close" id="legalModalClose" aria-label="Close">&times;</button>
+            </div>
+            <div class="legal-modal-body" id="legalModalBody"></div>
+            <div class="legal-modal-footer">
+                <button type="button" class="legal-modal-secondary" id="legalModalCloseFooter">Close</button>
+            </div>
+        </div>
     </div>
+
+    <template id="privacyPolicyTemplate">
+        <div class="legal-content">
+            <p><strong>Last updated:</strong> January 11, 2026</p>
+            <p>This Privacy Policy explains how the National Food Authority (NFA) Farmer’s Appointment Portal collects, uses, stores, and protects personal information. This page is provided for transparency for users of this system and is intended to align with applicable Philippine laws and government policies on privacy and access to information.</p>
+
+            <h3>1) Key privacy commitments</h3>
+            <ul>
+                <li><strong>Protection of personal information:</strong> Personal information (including sensitive personal information) under NFA control is disclosed only as permitted by existing laws. Reasonable security arrangements are implemented to guard against unauthorized access, leaks, loss, misuse, alteration, or premature disclosure.</li>
+                <li><strong>Freedom of Information (FOI) with privacy safeguards:</strong> While NFA supports public disclosure for matters of public interest, the right to privacy is a recognized exception. Information deemed confidential for the protection of individuals’ privacy should not be released in response to an FOI request.</li>
+                <li><strong>Lawful processing principles:</strong> When processing personal data (e.g., for program beneficiaries), NFA applies the principles of transparency, legitimate purpose, and proportionality. Disclosure of personal information (such as names and amounts received) may be allowed, but only to the minimum extent necessary for a stated purpose (e.g., transparency and accountability in government programs).</li>
+                <li><strong>Employee accountability:</strong> NFA employees and officials with authorized access to personal information are prohibited from disclosing it except as legally authorized.</li>
+            </ul>
+
+            <h3>2) Information we may collect</h3>
+            <ul>
+                <li><strong>Account and identity information:</strong> name, user role, login identifiers, and related account details.</li>
+                <li><strong>Appointment details:</strong> selected branch/region, appointment date, time slot (AM/PM), and other appointment-related information you submit.</li>
+                <li><strong>Operational records:</strong> status updates (e.g., pending/confirmed/completed/cancelled) and delivery details (e.g., delivered volume) where applicable.</li>
+                <li><strong>Technical data:</strong> basic device/browser data and logs necessary for security, troubleshooting, and audit purposes.</li>
+            </ul>
+
+            <h3>3) How we use your information</h3>
+            <ul>
+                <li>To schedule, manage, and process farmer appointments.</li>
+                <li>To communicate appointment-related updates/notifications to authorized users.</li>
+                <li>To enforce system security, prevent abuse, and maintain service availability.</li>
+                <li>To comply with legal obligations, audit requirements, and lawful government reporting.</li>
+            </ul>
+
+            <h3>4) Sharing and disclosure</h3>
+            <p>We may share or disclose information only when lawful and necessary, such as:</p>
+            <ul>
+                <li>Within NFA offices/branches and authorized personnel for appointment processing and service delivery.</li>
+                <li>With service providers strictly for system operations (e.g., email delivery), subject to confidentiality and security requirements.</li>
+                <li>When required by law, legal process, or valid government directives.</li>
+            </ul>
+
+            <h3>5) Data retention</h3>
+            <p>We retain personal information only for as long as necessary to fulfill the stated purposes, comply with legal requirements, and support auditing and record-keeping. Retention periods may vary depending on record type and regulatory obligations.</p>
+
+            <h3>6) Security measures</h3>
+            <p>We implement reasonable organizational, physical, and technical security measures. Access is restricted to authorized users, and administrative controls are applied to reduce the risk of unauthorized access or disclosure. No system can be guaranteed 100% secure, but we continuously improve controls where feasible.</p>
+
+            <h3>7) Your rights and inquiries</h3>
+            <p>If you have questions or requests related to personal information processed through this portal (e.g., correction of inaccurate details), please contact your NFA office/branch handling your appointment.</p>
+        </div>
+    </template>
+
+    <template id="termsOfUseTemplate">
+        <div class="legal-content">
+            <p><strong>Last updated:</strong> January 11, 2026</p>
+            <p>These Terms of Use govern your access to and use of the NFA Farmer’s Appointment Portal. By using this system, you agree to these terms.</p>
+
+            <h3>1) Eligibility and access</h3>
+            <ul>
+                <li>You must use the portal only for lawful purposes and in connection with NFA appointment services.</li>
+                <li>Access may be limited to authorized users (e.g., farmers, processors, administrators) depending on assigned roles.</li>
+            </ul>
+
+            <h3>2) User responsibilities</h3>
+            <ul>
+                <li><strong>Accurate information:</strong> You are responsible for providing accurate and complete information when creating or managing appointments.</li>
+                <li><strong>Account security:</strong> Keep your credentials confidential. Notify NFA personnel if you suspect unauthorized access.</li>
+                <li><strong>Appropriate use:</strong> Do not attempt to disrupt the system, bypass security controls, scrape data, or access accounts/data not intended for you.</li>
+            </ul>
+
+            <h3>3) Appointments and availability</h3>
+            <ul>
+                <li>Appointment slots are subject to branch capacity and availability.</li>
+                <li>NFA may confirm, reschedule, or cancel appointments based on operational requirements, capacity constraints, or incomplete/invalid information.</li>
+            </ul>
+
+            <h3>4) Privacy</h3>
+            <p>Your use of the portal is also governed by the Privacy Policy. By using the portal, you acknowledge that your information will be processed according to that policy and applicable laws.</p>
+
+            <h3>5) System availability and changes</h3>
+            <ul>
+                <li>The portal may be temporarily unavailable due to maintenance, updates, or technical issues.</li>
+                <li>NFA may modify features, workflows, or these Terms of Use at any time, with updates reflected on this page.</li>
+            </ul>
+
+            <h3>6) Disclaimer</h3>
+            <p>This portal is provided to streamline appointment processing. While reasonable efforts are made to keep information accurate and the service available, NFA does not guarantee uninterrupted operation and is not liable for delays or interruptions beyond its control.</p>
+
+            <h3>7) Governing law</h3>
+            <p>These Terms are governed by the laws of the Republic of the Philippines and applicable government rules and regulations.</p>
+        </div>
+    </template>
+
+    <template id="helpCenterTemplate">
+        <div class="legal-content">
+            <p><strong>Support</strong></p>
+            <ul>
+                <li><strong>Office hours:</strong> Monday – Friday, 8:00 AM – 5:00 PM</li>
+                <li><strong>Contact number:</strong> 09171139347</li>
+                <li><strong>Common tips:</strong> Ensure you selected the correct branch/region, pick an available date with capacity, and keep your appointment reference details ready when visiting the branch.</li>
+            </ul>
+            <p>If you’re a staff user and experience issues (e.g., missing appointments, notification problems), please coordinate with your local system administrator.</p>
+        </div>
+    </template>
     
     <script src="js/landing_app.js"></script>
+    <script src="js/legal_modal.js"></script>
 </body>
 </html>

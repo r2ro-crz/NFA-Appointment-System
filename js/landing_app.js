@@ -2,9 +2,6 @@
 document.addEventListener('DOMContentLoaded', () => {
     const landingContainer = document.querySelector('.landing-container');
     const actionButtons = document.querySelectorAll('.role-button');
-    const languageSelect = document.getElementById('languageSelect');
-    const languageToast = document.getElementById('languageToast');
-    const toastClose = document.querySelector('.toast-close');
     
     // Subtle fade-in animation for the container
     if (landingContainer) {
@@ -40,49 +37,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
     
-    // Language selector functionality
-    if (languageSelect) {
-        languageSelect.addEventListener('change', function() {
-            const selectedLanguage = this.value;
-            const languageName = this.options[this.selectedIndex].text;
-            
-            // Show toast notification
-            showToast(`Language changed to ${languageName}`);
-            
-            // In a real application, you would change the page language here
-            // For this example, we'll just simulate it
-            console.log(`Language changed to: ${selectedLanguage}`);
-            
-            // You could also store the preference in localStorage
-            localStorage.setItem('preferredLanguage', selectedLanguage);
-        });
-    }
-    
-    // Toast notification functions
-    function showToast(message) {
-        if (!languageToast) return;
-        
-        // Update toast message
-        languageToast.querySelector('span').textContent = message;
-        
-        // Show toast
-        languageToast.classList.add('show');
-        
-        // Auto-hide after 4 seconds
-        setTimeout(() => {
-            hideToast();
-        }, 4000);
-    }
-    
-    function hideToast() {
-        if (!languageToast) return;
-        languageToast.classList.remove('show');
-    }
-    
-    // Close toast on button click
-    if (toastClose) {
-        toastClose.addEventListener('click', hideToast);
-    }
+    // Language selector removed
     
     // Role cards animation on scroll
     const roleCards = document.querySelectorAll('.role-card');
@@ -122,9 +77,6 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
     
-    // Set initial language from localStorage if available
-    const savedLanguage = localStorage.getItem('preferredLanguage');
-    if (savedLanguage && languageSelect) {
-        languageSelect.value = savedLanguage;
-    }
+    // Language settings removed
+
 });

@@ -37,14 +37,43 @@ if ($initials === '' && !empty($_SESSION['username'])) {
     $initials = strtoupper(substr($_SESSION['username'], 0, 1));
 }
 
-// Get branch details (branch table has region_id; join regions for name)
-$branch_stmt = $pdo->prepare("SELECT b.branch_name, r.region_name FROM branch b JOIN regions r ON b.region_id = r.region_id WHERE b.branch_id = ?");
+// Get branch details (branch table includes address + website_link)
+$branch_stmt = $pdo->prepare("SELECT b.branch_name, b.address, b.website_link, r.region_name FROM branch b JOIN regions r ON b.region_id = r.region_id WHERE b.branch_id = ?");
 $branch_stmt->execute([$branch_id]);
 $branch = $branch_stmt->fetch(PDO::FETCH_ASSOC);
 $branch_name = $branch ? $branch['branch_name'] : $branch_id;
 $branch_region = $branch ? $branch['region_name'] : 'N/A';
-// Address is not stored in schema; display placeholder
-$branch_address = 'N/A';
+$branch_address = $branch && !empty($branch['address']) ? $branch['address'] : 'N/A';
+$branch_website = $branch && !empty($branch['website_link']) ? $branch['website_link'] : 'N/A';
+
+$branch_website_href = '';
+$branch_website_is_external = false;
+$branch_website_icon = 'fa-globe-asia';
+if ($branch_website !== 'N/A') {
+    $branch_website_trim = trim((string)$branch_website);
+
+    if ($branch_website_trim === '') {
+        $branch_website = 'N/A';
+    } elseif (preg_match('/^https?:\/\//i', $branch_website_trim)) {
+        $branch_website_href = $branch_website_trim;
+        $branch_website_is_external = true;
+        $branch_website_icon = 'fa-globe-asia';
+    } elseif (preg_match('/^www\./i', $branch_website_trim)) {
+        $branch_website_href = 'https://' . $branch_website_trim;
+        $branch_website_is_external = true;
+        $branch_website_icon = 'fa-globe-asia';
+    } elseif (strpos($branch_website_trim, '@') !== false) {
+        // Treat as email address
+        $branch_website_href = 'mailto:' . $branch_website_trim;
+        $branch_website_is_external = false;
+        $branch_website_icon = 'fa-envelope';
+    } else {
+        // Treat as a bare domain/host/path
+        $branch_website_href = 'https://' . $branch_website_trim;
+        $branch_website_is_external = true;
+        $branch_website_icon = 'fa-globe-asia';
+    }
+}
 
 // Get warehouse capacity
 $stmt = $pdo->prepare("SELECT warehouse_capacity, inventory FROM volume_capacity WHERE branch_id = ?");
@@ -195,7 +224,10 @@ $top_farmers = $farmer_stmt->fetchAll(PDO::FETCH_ASSOC);
                                 $status_class = $n['status'] == 'pending' ? 'status-pending' : 'status-cancelled';
                                 $time_label = $n['time_slot'] == 'AM' ? 'Morning' : 'Afternoon';
                             ?>
-                                <div class="notif-item <?php echo $unread ? 'unread' : ''; ?>" data-appointment-id="<?php echo $n['appointment_id']; ?>">
+                                <a class="notif-item <?php echo $unread ? 'unread' : ''; ?>" 
+                                   href="operator.php?view=<?php echo (int)$n['appointment_id']; ?>"
+                                   data-appointment-id="<?php echo (int)$n['appointment_id']; ?>"
+                                   data-is-read="<?php echo $unread ? '0' : '1'; ?>">
                                     <div class="notif-icon-small">
                                         <?php if ($n['status'] == 'pending'): ?>
                                             <i class="fas fa-clock status-pending"></i>
@@ -222,15 +254,12 @@ $top_farmers = $farmer_stmt->fetchAll(PDO::FETCH_ASSOC);
                                         </div>
                                     </div>
                                     <div class="notif-actions">
-                                        <button class="action-btn mark-read-btn" title="<?php echo $unread ? 'Mark as Read' : 'Mark as Unread'; ?>">
-                                            <?php if ($unread): ?>
-                                                <i class="fas fa-check-circle"></i>
-                                            <?php else: ?>
-                                                <i class="fas fa-circle"></i>
-                                            <?php endif; ?>
-                                        </button>
+                                        <label class="notif-check" title="Mark as <?php echo $unread ? 'Read' : 'Unread'; ?>">
+                                            <input class="notif-checkbox" type="checkbox" <?php echo $unread ? '' : 'checked'; ?> aria-label="Toggle read status">
+                                            <span class="notif-check-ui" aria-hidden="true"></span>
+                                        </label>
                                     </div>
-                                </div>
+                                </a>
                             <?php endforeach; ?>
                         <?php else: ?>
                             <div class="no-notifications">
@@ -297,9 +326,21 @@ $top_farmers = $farmer_stmt->fetchAll(PDO::FETCH_ASSOC);
                         <i class="fas fa-warehouse"></i>
                     </div>
                     <div class="branch-details">
-                        <h3><?php echo htmlspecialchars($branch_name); ?></h3>
+                        <div class="branch-title">
+                            <h3><?php echo htmlspecialchars($branch_name); ?></h3>
+                            <div class="branch-subtitle"><?php echo htmlspecialchars($branch_region); ?></div>
+                        </div>
                         <p><i class="fas fa-map-marker-alt"></i> <?php echo htmlspecialchars($branch_address); ?></p>
-                        <p><i class="fas fa-globe-asia"></i> <?php echo htmlspecialchars($branch_region); ?> Region</p>
+                        <p>
+                            <i class="fas <?php echo htmlspecialchars($branch_website_icon); ?>"></i>
+                            <?php if (!empty($branch_website_href)): ?>
+                                <a class="branch-link" href="<?php echo htmlspecialchars($branch_website_href); ?>" <?php echo $branch_website_is_external ? 'target="_blank" rel="noopener noreferrer"' : ''; ?>>
+                                    <?php echo htmlspecialchars($branch_website); ?>
+                                </a>
+                            <?php else: ?>
+                                <?php echo htmlspecialchars($branch_website); ?>
+                            <?php endif; ?>
+                        </p>
                     </div>
                 </div>
             </div>
@@ -658,6 +699,6 @@ $top_farmers = $farmer_stmt->fetchAll(PDO::FETCH_ASSOC);
     </script>
 
     <!-- JavaScript -->
-    <script src="js/processor.js"></script>
+    <script src="js/processor.js?v=<?php echo urlencode((string)@filemtime(__DIR__ . '/js/processor.js')); ?>"></script>
 </body>
 </html>

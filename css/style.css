@@ -775,16 +775,17 @@ body {
 
 .calendar-day {
     background: white;
-    padding: 1rem;
+    padding: 0.75rem 0.5rem 1.85rem;
     text-align: center;
     cursor: pointer;
     transition: var(--transition-fast);
-    min-height: 80px;
+    height: 80px;
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
     position: relative;
+    overflow: hidden;
 }
 
 .calendar-day:hover:not(.disabled):not(.unavailable) {
@@ -818,6 +819,70 @@ body {
 
 .calendar-day.weekend {
     background: #ffebee;
+}
+
+.calendar-day.holiday,
+.calendar-day.holiday.unavailable {
+    background: #fff3cd;
+    color: #856404;
+    cursor: not-allowed;
+}
+
+.calendar-day.holiday .day-number {
+    color: #856404;
+}
+
+.day-holiday {
+    position: absolute;
+    left: 8px;
+    right: 8px;
+    bottom: 8px;
+    font-size: 0.65rem;
+    line-height: 1.15;
+    padding: 0.2rem 0.45rem;
+    border-radius: 999px;
+    background: rgba(133, 100, 4, 0.12);
+    color: #856404;
+    text-align: center;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    overflow: hidden;
+}
+
+/* Tooltip for holiday names */
+.calendar-day.holiday[data-holiday] {
+    position: relative;
+}
+
+.calendar-day.holiday[data-holiday]:hover::after,
+.calendar-day.holiday[data-holiday]:focus-visible::after {
+    content: attr(data-holiday);
+    position: absolute;
+    left: 50%;
+    bottom: calc(100% + 8px);
+    transform: translateX(-50%);
+    background: #111827;
+    color: #ffffff;
+    padding: 0.4rem 0.6rem;
+    border-radius: 0.5rem;
+    font-size: 0.75rem;
+    white-space: nowrap;
+    z-index: 10;
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.15);
+}
+
+.calendar-day.holiday[data-holiday]:hover::before,
+.calendar-day.holiday[data-holiday]:focus-visible::before {
+    content: '';
+    position: absolute;
+    left: 50%;
+    bottom: calc(100% + 2px);
+    transform: translateX(-50%);
+    border: 6px solid transparent;
+    border-top-color: #111827;
+    z-index: 10;
 }
 
 .day-number {
@@ -872,6 +937,11 @@ body {
 .legend-color.weekend {
     background: #ffebee;
     border: 1px solid #ffcdd2;
+}
+
+.legend-color.holiday {
+    background: #fff3cd;
+    border: 1px solid #ffeeba;
 }
 
 /* Ensure selected day color overrides available/weekend/unavailable backgrounds */
@@ -1379,6 +1449,25 @@ body {
     font-size: 1.1rem;
 }
 
+.reference-placeholder {
+    margin: 0;
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+
+#summaryReferenceNumber {
+    font-family: 'Courier New', monospace;
+    font-weight: 700;
+    color: var(--nfa-green);
+}
+
+.reference-note {
+    font-size: 0.85rem;
+    color: var(--medium-gray);
+}
+
 .status-badge {
     padding: 0.25rem 0.75rem;
     border-radius: 20px;
@@ -1424,6 +1513,33 @@ body {
     justify-content: center;
     margin-top: var(--spacing-xl);
     flex-wrap: wrap;
+}
+
+.confirmation-actions .btn-print {
+    min-width: 220px;
+}
+
+.printable-confirmation {
+    display: none;
+}
+
+@media print {
+    body.printing-confirmation * {
+        visibility: hidden !important;
+    }
+
+    body.printing-confirmation #printableConfirmation,
+    body.printing-confirmation #printableConfirmation * {
+        visibility: visible !important;
+    }
+
+    body.printing-confirmation #printableConfirmation {
+        display: block !important;
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 100%;
+    }
 }
 
 .btn-print, .btn-new, .btn-home {
@@ -1533,14 +1649,14 @@ body {
 .footer {
     background: var(--dark-gray);
     color: white;
-    padding: var(--spacing-xl) 0;
+    padding: calc(var(--spacing-xl) - 0.5rem) 0;
     margin-top: var(--spacing-xl);
 }
 
 .footer-content {
     display: grid;
-    grid-template-columns: 1fr 2fr 1fr;
-    gap: var(--spacing-xl);
+    grid-template-columns: 1.2fr 1fr 1.2fr;
+    gap: var(--spacing-lg);
     align-items: center;
 }
 
@@ -1556,6 +1672,12 @@ body {
     display: flex;
     align-items: center;
     gap: var(--spacing-md);
+}
+
+@media (max-width: 768px) {
+    .footer-logo {
+        justify-content: center;
+    }
 }
 
 .footer-logo-img {
@@ -1576,7 +1698,7 @@ body {
 .footer-links {
     display: flex;
     justify-content: center;
-    gap: var(--spacing-lg);
+    gap: 1.25rem;
     flex-wrap: wrap;
 }
 
@@ -1584,7 +1706,23 @@ body {
     color: white;
     text-decoration: none;
     opacity: 0.8;
+    font-weight: 500;
+    letter-spacing: 0.1px;
+    padding: 0.15rem 0.1rem;
     transition: var(--transition-normal);
+}
+
+.footer-links a + a {
+    position: relative;
+}
+
+.footer-links a + a::before {
+    content: '•';
+    position: absolute;
+    left: -0.75rem;
+    top: 50%;
+    transform: translateY(-50%);
+    opacity: 0.45;
 }
 
 .footer-links a:hover {

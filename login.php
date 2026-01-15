@@ -5,6 +5,18 @@ if (isset($_GET['error']) && $_GET['error'] == 1) {
     $error_message = "Invalid Username or Password.\nPlease try again.";
 }
 
+// Account pending approval
+$pending_message = null;
+if (isset($_GET['pending']) && $_GET['pending'] == 1) {
+    $pending_message = "Your account is not yet approved.\nPlease wait for an administrator to approve your registration.";
+}
+
+// Registration success
+$registered_message = null;
+if (isset($_GET['registered']) && $_GET['registered'] == 1) {
+    $registered_message = "Registration submitted successfully.\nYour account is pending approval.";
+}
+
 // Check if account is locked from too many attempts
 $lock_message = null;
 if (isset($_GET['locked']) && $_GET['locked'] == 1) {
@@ -19,6 +31,7 @@ if (isset($_GET['locked']) && $_GET['locked'] == 1) {
     <title>NFA Staff Login - Secure Access Portal</title>
     <link rel="icon" href="img/nfa-logo.png" type="image/png"/>
     <link rel="stylesheet" href="css/login.css">
+    <link rel="stylesheet" href="css/legal_modal.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 </head>
 <body class="login-body">
@@ -57,6 +70,26 @@ if (isset($_GET['locked']) && $_GET['locked'] == 1) {
                     <div class="alert-content">
                         <strong>Authentication Failed</strong>
                         <p><?php echo nl2br(htmlspecialchars($error_message)); ?></p>
+                    </div>
+                </div>
+            <?php endif; ?>
+
+            <?php if ($registered_message): ?>
+                <div class="alert" role="alert" style="border-left: 4px solid var(--nfa-green); background: rgba(0, 122, 51, 0.08);">
+                    <i class="fas fa-check-circle alert-icon" style="color: var(--nfa-green);"></i>
+                    <div class="alert-content">
+                        <strong>Registration Received</strong>
+                        <p><?php echo nl2br(htmlspecialchars($registered_message)); ?></p>
+                    </div>
+                </div>
+            <?php endif; ?>
+
+            <?php if ($pending_message): ?>
+                <div class="alert lockout" role="alert">
+                    <i class="fas fa-user-clock alert-icon"></i>
+                    <div class="alert-content">
+                        <strong>Account Pending Approval</strong>
+                        <p><?php echo nl2br(htmlspecialchars($pending_message)); ?></p>
                     </div>
                 </div>
             <?php endif; ?>
@@ -134,10 +167,13 @@ if (isset($_GET['locked']) && $_GET['locked'] == 1) {
             
             <!-- Additional options -->
             <div class="login-options">
-                <a href="#" class="forgot-link">
+                <a href="#" class="forgot-link option-link" id="forgotPasswordLink">
                     <i class="fas fa-question-circle"></i> Forgot Password?
                 </a>
-                <a href="landing.html" class="back-link">
+                <a href="register.php" class="forgot-link option-link">
+                    <i class="fas fa-user-plus"></i> Create Account
+                </a>
+                <a href="landing.html" class="back-link option-link">
                     <i class="fas fa-arrow-left"></i> Back to Main Portal
                 </a>
             </div>
@@ -149,7 +185,7 @@ if (isset($_GET['locked']) && $_GET['locked'] == 1) {
                     This is a secure system. All login attempts are logged and monitored.
                 </p>
                 <div class="footer-links">
-                    <a href="#"><i class="fas fa-user-shield"></i> Privacy Policy</a>
+                    <a href="#" data-legal-modal="privacy"><i class="fas fa-user-shield"></i> Privacy Policy</a>
                     <a href="#"><i class="fas fa-headset"></i> IT Support</a>
                 </div>
             </div>
@@ -164,7 +200,125 @@ if (isset($_GET['locked']) && $_GET['locked'] == 1) {
             <p class="loading-subtext">Please wait while we verify your credentials</p>
         </div>
     </div>
+
+    <!-- OTP 2FA Modal -->
+    <div class="otp-modal-backdrop" id="otpModalBackdrop" hidden>
+        <div class="otp-modal" role="dialog" aria-modal="true" aria-labelledby="otpModalTitle">
+            <div class="otp-modal-header">
+                <h2 class="otp-modal-title" id="otpModalTitle"><i class="fas fa-key"></i> Enter Verification Code</h2>
+                <button type="button" class="otp-modal-close" id="otpModalClose" aria-label="Close">&times;</button>
+            </div>
+            <div class="otp-modal-body">
+                <p class="otp-hint">We sent a 6-digit OTP code to your email. Enter it below to continue.</p>
+                <div class="otp-error" id="otpError" role="alert" style="display:none;"></div>
+
+                <form id="otpForm" autocomplete="one-time-code">
+                    <div class="otp-inputs" id="otpInputs">
+                        <input class="otp-box" inputmode="numeric" pattern="[0-9]*" maxlength="1" aria-label="Digit 1" />
+                        <input class="otp-box" inputmode="numeric" pattern="[0-9]*" maxlength="1" aria-label="Digit 2" />
+                        <input class="otp-box" inputmode="numeric" pattern="[0-9]*" maxlength="1" aria-label="Digit 3" />
+                        <input class="otp-box" inputmode="numeric" pattern="[0-9]*" maxlength="1" aria-label="Digit 4" />
+                        <input class="otp-box" inputmode="numeric" pattern="[0-9]*" maxlength="1" aria-label="Digit 5" />
+                        <input class="otp-box" inputmode="numeric" pattern="[0-9]*" maxlength="1" aria-label="Digit 6" />
+                    </div>
+
+                    <button type="submit" class="otp-submit" id="otpSubmitBtn">
+                        <i class="fas fa-check"></i> Verify
+                    </button>
+
+                    <div class="otp-actions">
+                        <button type="button" class="otp-link" id="otpResendBtn">Resend code</button>
+                        <button type="button" class="otp-link danger" id="otpCancelBtn">Cancel</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Forgot Password Modal (Email -> OTP -> New Password) -->
+    <div class="fp-modal-backdrop" id="fpModalBackdrop" hidden>
+        <div class="fp-modal" role="dialog" aria-modal="true" aria-labelledby="fpModalTitle">
+            <div class="fp-modal-header">
+                <h2 class="fp-modal-title" id="fpModalTitle"><i class="fas fa-unlock-alt"></i> Reset Password</h2>
+                <button type="button" class="fp-modal-close" id="fpModalClose" aria-label="Close">&times;</button>
+            </div>
+
+            <div class="fp-modal-body">
+                <div class="fp-alert" id="fpAlert" role="alert" style="display:none;"></div>
+
+                <!-- Step 1: Email -->
+                <div class="fp-step" id="fpStepEmail">
+                    <p class="fp-hint">Enter your account email address. We will send a verification code to continue.</p>
+                    <form id="fpEmailForm">
+                        <div class="fp-field">
+                            <label for="fpEmail"><i class="fas fa-envelope"></i> Email Address</label>
+                            <input type="email" id="fpEmail" name="fpEmail" placeholder="name@example.com" autocomplete="email" required />
+                        </div>
+                        <button type="submit" class="fp-primary" id="fpEmailSubmit">
+                            <i class="fas fa-paper-plane"></i> Send Code
+                        </button>
+                    </form>
+                </div>
+
+                <!-- Step 2: OTP -->
+                <div class="fp-step" id="fpStepOtp" hidden>
+                    <p class="fp-hint">Enter the 6-digit code sent to your email.</p>
+                    <form id="fpOtpForm" autocomplete="one-time-code">
+                        <div class="otp-inputs" id="fpOtpInputs">
+                            <input class="otp-box" inputmode="numeric" pattern="[0-9]*" maxlength="1" aria-label="Digit 1" />
+                            <input class="otp-box" inputmode="numeric" pattern="[0-9]*" maxlength="1" aria-label="Digit 2" />
+                            <input class="otp-box" inputmode="numeric" pattern="[0-9]*" maxlength="1" aria-label="Digit 3" />
+                            <input class="otp-box" inputmode="numeric" pattern="[0-9]*" maxlength="1" aria-label="Digit 4" />
+                            <input class="otp-box" inputmode="numeric" pattern="[0-9]*" maxlength="1" aria-label="Digit 5" />
+                            <input class="otp-box" inputmode="numeric" pattern="[0-9]*" maxlength="1" aria-label="Digit 6" />
+                        </div>
+                        <button type="submit" class="fp-primary" id="fpOtpSubmit">
+                            <i class="fas fa-check"></i> Verify Code
+                        </button>
+                        <div class="fp-actions">
+                            <button type="button" class="fp-link" id="fpResendBtn">Resend code</button>
+                            <button type="button" class="fp-link danger" id="fpCancelBtn">Cancel</button>
+                        </div>
+                    </form>
+                </div>
+
+                <!-- Step 3: New Password -->
+                <div class="fp-step" id="fpStepPassword" hidden>
+                    <p class="fp-hint">Create a new password that meets the rules below.</p>
+                    <ul class="fp-rules">
+                        <li>At least 8 characters</li>
+                        <li>At least 1 uppercase letter</li>
+                        <li>At least 1 lowercase letter</li>
+                        <li>At least 1 number</li>
+                    </ul>
+
+                    <form id="fpPasswordForm">
+                        <div class="fp-field">
+                            <label for="fpNewPassword"><i class="fas fa-key"></i> New Password</label>
+                            <div class="fp-input-wrap">
+                                <input type="password" id="fpNewPassword" autocomplete="new-password" required />
+                                <button type="button" class="fp-toggle" id="fpToggleNew" aria-label="Show password"><i class="fas fa-eye"></i></button>
+                            </div>
+                        </div>
+
+                        <div class="fp-field">
+                            <label for="fpConfirmPassword"><i class="fas fa-key"></i> Confirm Password</label>
+                            <div class="fp-input-wrap">
+                                <input type="password" id="fpConfirmPassword" autocomplete="new-password" required />
+                                <button type="button" class="fp-toggle" id="fpToggleConfirm" aria-label="Show password"><i class="fas fa-eye"></i></button>
+                            </div>
+                        </div>
+
+                        <button type="submit" class="fp-primary" id="fpPasswordSubmit">
+                            <i class="fas fa-save"></i> Update Password
+                        </button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
     
     <script src="js/login_app.js"></script>
+    <script src="js/legal_modal.js"></script>
 </body>
 </html>

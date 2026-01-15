@@ -4,6 +4,374 @@ session_start();
 // Include database configuration file
 require_once 'db_config.php'; 
 
+require_once __DIR__ . '/../vendor/autoload.php';
+
+use PHPMailer\PHPMailer\PHPMailer;
+use PHPMailer\PHPMailer\Exception;
+
+function is_ajax_request(): bool {
+    $requestedWith = $_SERVER['HTTP_X_REQUESTED_WITH'] ?? '';
+    $accept = $_SERVER['HTTP_ACCEPT'] ?? '';
+    return strtolower($requestedWith) === 'xmlhttprequest' || str_contains(strtolower($accept), 'application/json');
+}
+
+function json_response(array $payload, int $statusCode = 200): void {
+    http_response_code($statusCode);
+    header('Content-Type: application/json; charset=utf-8');
+    echo json_encode($payload);
+    exit;
+}
+
+function clear_pending_2fa(): void {
+    unset($_SESSION['pending_2fa']);
+}
+
+function clear_pending_pw_reset(): void {
+    unset($_SESSION['pending_pw_reset']);
+}
+
+function send_password_reset_otp_email(string $toEmail, string $toName, string $otp): void {
+    $mail = new PHPMailer(true);
+
+    $mail->isSMTP();
+    $mail->Host       = 'smtp.gmail.com';
+    $mail->SMTPAuth   = true;
+    $mail->Username   = 'anonymous.00112211@gmail.com';
+    $mail->Password   = 'xwucrpggtanqrvwp';
+    $mail->SMTPSecure = PHPMailer::ENCRYPTION_STARTTLS;
+    $mail->Port       = 587;
+
+    $mail->setFrom('no-reply@nfa.gov.ph', 'NFA Appointment System');
+    $mail->addAddress($toEmail, $toName);
+
+    $mail->isHTML(true);
+    $mail->Subject = 'NFA Password Reset Code';
+    $mail->Body = "
+        <h3>Password Reset Request</h3>
+        <p>We received a request to reset your password for the NFA Appointment System.</p>
+        <p>Your 6-digit verification code is:</p>
+        <div style=\"font-size: 28px; font-weight: 800; letter-spacing: 6px; padding: 10px 0;\">{$otp}</div>
+        <p>This code will expire in <strong>10 minutes</strong>.</p>
+        <p>If you did not request a password reset, you can ignore this email.</p>
+    ";
+
+    $mail->send();
+}
+
+function send_password_changed_email(string $toEmail, string $toName): void {
+    $mail = new PHPMailer(true);
+
+    $mail->isSMTP();
+    $mail->Host       = 'smtp.gmail.com';
+    $mail->SMTPAuth   = true;
+    $mail->Username   = 'anonymous.00112211@gmail.com';
+    $mail->Password   = 'xwucrpggtanqrvwp';
+    $mail->SMTPSecure = PHPMailer::ENCRYPTION_STARTTLS;
+    $mail->Port       = 587;
+
+    $mail->setFrom('no-reply@nfa.gov.ph', 'NFA Appointment System');
+    $mail->addAddress($toEmail, $toName);
+
+    $mail->isHTML(true);
+    $mail->Subject = 'Your NFA Password Was Changed';
+    $mail->Body = "
+        <h3>Password Updated</h3>
+        <p>Hello {$toName},</p>
+        <p>This is a confirmation that your password for the NFA Appointment System was changed.</p>
+        <p>If you did not make this change, please contact IT support immediately.</p>
+    ";
+
+    $mail->send();
+}
+
+function validate_new_password(string $password): array {
+    $errors = [];
+    if (strlen($password) < 8) {
+        $errors[] = 'Password must be at least 8 characters.';
+    }
+    if (!preg_match('/[A-Z]/', $password)) {
+        $errors[] = 'Password must include at least 1 uppercase letter.';
+    }
+    if (!preg_match('/[a-z]/', $password)) {
+        $errors[] = 'Password must include at least 1 lowercase letter.';
+    }
+    if (!preg_match('/\d/', $password)) {
+        $errors[] = 'Password must include at least 1 number.';
+    }
+    if (!preg_match('/[^A-Za-z0-9]/', $password)) {
+        $errors[] = 'Password must include at least 1 special character.';
+    }
+    return $errors;
+}
+
+function send_otp_email(string $toEmail, string $toName, string $otp): void {
+    $mail = new PHPMailer(true);
+
+    // Server settings (same SMTP config used in api.php)
+    $mail->isSMTP();
+    $mail->Host       = 'smtp.gmail.com';
+    $mail->SMTPAuth   = true;
+    $mail->Username   = 'anonymous.00112211@gmail.com';
+    $mail->Password   = 'xwucrpggtanqrvwp';
+    $mail->SMTPSecure = PHPMailer::ENCRYPTION_STARTTLS;
+    $mail->Port       = 587;
+
+    // Recipients
+    $mail->setFrom('no-reply@nfa.gov.ph', 'NFA Appointment System');
+    $mail->addAddress($toEmail, $toName);
+
+    // Content
+    $mail->isHTML(true);
+    $mail->Subject = 'Your NFA Login Verification Code';
+    $mail->Body = "
+        <h3>Login Verification Code</h3>
+        <p>You are trying to sign in to the NFA Appointment System.</p>
+        <p>Your 6-digit verification code is:</p>
+        <div style=\"font-size: 28px; font-weight: 800; letter-spacing: 6px; padding: 10px 0;\">{$otp}</div>
+        <p>This code will expire in <strong>5 minutes</strong>.</p>
+        <p>If you did not request this code, you can ignore this email.</p>
+    ";
+
+    $mail->send();
+}
+
+// --- OTP verification / resend / cancel handlers (AJAX) ---
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
+    $action = (string)$_POST['action'];
+
+    // --- Forgot password flow ---
+    if ($action === 'startPasswordReset') {
+        $email = trim((string)($_POST['email'] ?? ''));
+        if ($email === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            json_response(['success' => false, 'message' => 'Please enter a valid email address.'], 400);
+        }
+
+        try {
+            $stmt = $pdo->prepare("SELECT user_id, username, email_address FROM users WHERE email_address = ? LIMIT 1");
+            $stmt->execute([$email]);
+            $user = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$user) {
+                json_response(['success' => false, 'message' => 'No account is registered with that email address.'], 404);
+            }
+
+            // Rate limit send (30 seconds) per session
+            $existing = $_SESSION['pending_pw_reset'] ?? null;
+            if ($existing && !empty($existing['sent_at']) && (time() - (int)$existing['sent_at']) < 30) {
+                json_response(['success' => false, 'message' => 'Please wait a bit before requesting a new code.'], 429);
+            }
+
+            $otp = (string)random_int(100000, 999999);
+            $_SESSION['pending_pw_reset'] = [
+                'user_id' => (int)$user['user_id'],
+                'username' => (string)$user['username'],
+                'email_address' => (string)$user['email_address'],
+                'otp_hash' => password_hash($otp, PASSWORD_DEFAULT),
+                'expires_at' => time() + 600,
+                'attempts_left' => 5,
+                'sent_at' => time(),
+                'stage' => 'otp'
+            ];
+
+            send_password_reset_otp_email((string)$user['email_address'], (string)$user['username'], $otp);
+            json_response(['success' => true]);
+        } catch (Exception $e) {
+            clear_pending_pw_reset();
+            json_response(['success' => false, 'message' => 'Failed to send reset code. Please contact IT support.'], 500);
+        } catch (PDOException $e) {
+            clear_pending_pw_reset();
+            json_response(['success' => false, 'message' => 'Server error. Please try again later.'], 500);
+        }
+    }
+
+    if ($action === 'resendPasswordResetOtp') {
+        $pending = $_SESSION['pending_pw_reset'] ?? null;
+        if (!$pending || empty($pending['email_address']) || empty($pending['username'])) {
+            json_response(['success' => false, 'message' => 'Reset session expired. Please try again.'], 401);
+        }
+        if (($pending['stage'] ?? '') !== 'otp') {
+            json_response(['success' => false, 'message' => 'Reset session is not in OTP stage.'], 400);
+        }
+
+        $lastSentAt = (int)($pending['sent_at'] ?? 0);
+        if ($lastSentAt && (time() - $lastSentAt) < 30) {
+            json_response(['success' => false, 'message' => 'Please wait a bit before requesting a new code.'], 429);
+        }
+
+        $otp = (string)random_int(100000, 999999);
+        $_SESSION['pending_pw_reset']['otp_hash'] = password_hash($otp, PASSWORD_DEFAULT);
+        $_SESSION['pending_pw_reset']['expires_at'] = time() + 600;
+        $_SESSION['pending_pw_reset']['attempts_left'] = 5;
+        $_SESSION['pending_pw_reset']['sent_at'] = time();
+
+        try {
+            send_password_reset_otp_email((string)$pending['email_address'], (string)$pending['username'], $otp);
+        } catch (Exception $e) {
+            json_response(['success' => false, 'message' => 'Failed to send reset code. Please contact IT support.'], 500);
+        }
+
+        json_response(['success' => true, 'message' => 'A new code was sent to your email.']);
+    }
+
+    if ($action === 'verifyPasswordResetOtp') {
+        $otp = preg_replace('/\D+/', '', (string)($_POST['otp'] ?? ''));
+        if (strlen($otp) !== 6) {
+            json_response(['success' => false, 'message' => 'Please enter the 6-digit code.'], 400);
+        }
+
+        $pending = $_SESSION['pending_pw_reset'] ?? null;
+        if (!$pending || empty($pending['otp_hash']) || empty($pending['expires_at'])) {
+            json_response(['success' => false, 'message' => 'Reset session expired. Please try again.'], 401);
+        }
+        if (($pending['stage'] ?? '') !== 'otp') {
+            json_response(['success' => false, 'message' => 'Reset session is not in OTP stage.'], 400);
+        }
+        if (time() > (int)$pending['expires_at']) {
+            clear_pending_pw_reset();
+            json_response(['success' => false, 'message' => 'Code expired. Please try again.'], 401);
+        }
+
+        $attemptsLeft = (int)($pending['attempts_left'] ?? 5);
+        if ($attemptsLeft <= 0) {
+            clear_pending_pw_reset();
+            json_response(['success' => false, 'message' => 'Too many invalid attempts. Please try again.'], 429);
+        }
+
+        $isValid = password_verify($otp, (string)$pending['otp_hash']);
+        if (!$isValid) {
+            $_SESSION['pending_pw_reset']['attempts_left'] = $attemptsLeft - 1;
+            json_response(['success' => false, 'message' => 'Invalid code. Please try again.'], 401);
+        }
+
+        $_SESSION['pending_pw_reset']['stage'] = 'password';
+        json_response(['success' => true]);
+    }
+
+    if ($action === 'setNewPassword') {
+        $password = (string)($_POST['password'] ?? '');
+        $confirm = (string)($_POST['confirm'] ?? '');
+
+        $pending = $_SESSION['pending_pw_reset'] ?? null;
+        if (!$pending || empty($pending['user_id']) || empty($pending['email_address']) || empty($pending['username'])) {
+            json_response(['success' => false, 'message' => 'Reset session expired. Please try again.'], 401);
+        }
+        if (($pending['stage'] ?? '') !== 'password') {
+            json_response(['success' => false, 'message' => 'Please verify the OTP first.'], 400);
+        }
+
+        if ($password === '' || $confirm === '') {
+            json_response(['success' => false, 'message' => 'Please enter and confirm your new password.'], 400);
+        }
+        if (!hash_equals($password, $confirm)) {
+            json_response(['success' => false, 'message' => 'Passwords do not match.'], 400);
+        }
+
+        $pwErrors = validate_new_password($password);
+        if (!empty($pwErrors)) {
+            json_response(['success' => false, 'message' => implode(' ', $pwErrors)], 400);
+        }
+
+        try {
+            $hash = password_hash($password, PASSWORD_DEFAULT);
+            $stmt = $pdo->prepare("UPDATE users SET password_hash = ? WHERE user_id = ?");
+            $stmt->execute([$hash, (int)$pending['user_id']]);
+
+            try {
+                send_password_changed_email((string)$pending['email_address'], (string)$pending['username']);
+            } catch (Exception $e) {
+                // Don't fail reset if notification email fails
+            }
+
+            clear_pending_pw_reset();
+            json_response(['success' => true]);
+        } catch (PDOException $e) {
+            json_response(['success' => false, 'message' => 'Failed to update password. Please try again.'], 500);
+        }
+    }
+
+    if ($action === 'cancelPasswordReset') {
+        clear_pending_pw_reset();
+        json_response(['success' => true]);
+    }
+
+    if ($action === 'verifyOtp') {
+        $otp = preg_replace('/\D+/', '', (string)($_POST['otp'] ?? ''));
+        if (strlen($otp) !== 6) {
+            json_response(['success' => false, 'message' => 'Please enter the 6-digit code.'], 400);
+        }
+
+        $pending = $_SESSION['pending_2fa'] ?? null;
+        if (!$pending || empty($pending['otp_hash']) || empty($pending['expires_at'])) {
+            json_response(['success' => false, 'message' => 'Verification session expired. Please sign in again.'], 401);
+        }
+
+        if (time() > (int)$pending['expires_at']) {
+            clear_pending_2fa();
+            json_response(['success' => false, 'message' => 'Code expired. Please sign in again.'], 401);
+        }
+
+        $attemptsLeft = (int)($pending['attempts_left'] ?? 5);
+        if ($attemptsLeft <= 0) {
+            clear_pending_2fa();
+            json_response(['success' => false, 'message' => 'Too many invalid attempts. Please sign in again.'], 429);
+        }
+
+        $isValid = password_verify($otp, (string)$pending['otp_hash']);
+        if (!$isValid) {
+            $_SESSION['pending_2fa']['attempts_left'] = $attemptsLeft - 1;
+            json_response(['success' => false, 'message' => 'Invalid code. Please try again.'], 401);
+        }
+
+        // Success: finalize authentication
+        $_SESSION["loggedin"] = true;
+        $_SESSION["id"] = (int)$pending['user_id'];
+        $_SESSION["username"] = (string)$pending['username'];
+        $_SESSION["user_type"] = (string)$pending['user_type'];
+        $_SESSION["branch_id"] = (int)$pending['branch_id'];
+
+        clear_pending_2fa();
+
+        // IMPORTANT: Return paths relative to login.php (project root), not relative to php_helper/
+        // so the browser stays under /Appointment_System/.
+        $redirect = ($_SESSION["user_type"] === 'Admin') ? 'admin.html' : 'processor_dashboard.php';
+        json_response(['success' => true, 'redirect' => $redirect]);
+    }
+
+    if ($action === 'cancelOtp') {
+        clear_pending_2fa();
+        json_response(['success' => true]);
+    }
+
+    if ($action === 'resendOtp') {
+        $pending = $_SESSION['pending_2fa'] ?? null;
+        if (!$pending || empty($pending['email_address']) || empty($pending['username'])) {
+            json_response(['success' => false, 'message' => 'No verification session found. Please sign in again.'], 401);
+        }
+
+        // Rate limit resend (30 seconds)
+        $lastSentAt = (int)($pending['sent_at'] ?? 0);
+        if ($lastSentAt && (time() - $lastSentAt) < 30) {
+            json_response(['success' => false, 'message' => 'Please wait a bit before requesting a new code.'], 429);
+        }
+
+        $otp = (string)random_int(100000, 999999);
+        $_SESSION['pending_2fa']['otp_hash'] = password_hash($otp, PASSWORD_DEFAULT);
+        $_SESSION['pending_2fa']['expires_at'] = time() + 300;
+        $_SESSION['pending_2fa']['attempts_left'] = 5;
+        $_SESSION['pending_2fa']['sent_at'] = time();
+
+        try {
+            send_otp_email((string)$pending['email_address'], (string)$pending['username'], $otp);
+        } catch (Exception $e) {
+            json_response(['success' => false, 'message' => 'Failed to send OTP email. Please contact IT support.'], 500);
+        }
+
+        json_response(['success' => true, 'message' => 'A new code was sent to your email.']);
+    }
+
+    json_response(['success' => false, 'message' => 'Unknown action.'], 400);
+}
+
 if ($_SERVER["REQUEST_METHOD"] == "POST") {
     
     $username = trim($_POST["username"]);
@@ -17,7 +385,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     }
 
     // SQL to fetch user data and the hashed password
-    $sql = "SELECT user_id, username, password_hash, user_type, branch_id FROM users WHERE username = :username";
+    $sql = "SELECT user_id, username, password_hash, user_type, branch_id, email_address, status FROM users WHERE username = :username";
     
     if($stmt = $pdo->prepare($sql)) {
         $stmt->bindParam(":username", $param_username, PDO::PARAM_STR);
@@ -30,20 +398,45 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
 
                 // Verify the password against the stored hash
                 if (password_verify($password, $hashed_password)) {
-                    
-                    // Authentication successful: Store session variables
-                    $_SESSION["loggedin"] = true;
-                    $_SESSION["id"] = $row["user_id"];
-                    $_SESSION["username"] = $row["username"];
-                    $_SESSION["user_type"] = $row["user_type"];
-                    $_SESSION["branch_id"] = $row["branch_id"]; 
 
-                    // Redirect based on user role
-                    if ($_SESSION["user_type"] == 'Admin') {
-                        header("location: ../admin.html"); 
-                    } else { // Processor/Operator
-                        header("location: ../processor_dashboard.php");
+                    $status = trim((string)($row['status'] ?? ''));
+                    if (strcasecmp($status, 'Approved') !== 0) {
+                        // Only approved accounts can login
+                        header("Location: ../login.php?pending=1");
+                        exit;
                     }
+
+                    $email = trim((string)($row['email_address'] ?? ''));
+                    if ($email === '') {
+                        // Enforce 2FA only if email exists
+                        header("Location: ../login.php?error=1");
+                        exit;
+                    }
+
+                    // Generate OTP and store pending login context in session
+                    $otp = (string)random_int(100000, 999999);
+                    $_SESSION['pending_2fa'] = [
+                        'user_id' => (int)$row['user_id'],
+                        'username' => (string)$row['username'],
+                        'user_type' => (string)$row['user_type'],
+                        'branch_id' => (int)$row['branch_id'],
+                        'email_address' => $email,
+                        'otp_hash' => password_hash($otp, PASSWORD_DEFAULT),
+                        'expires_at' => time() + 300,
+                        'attempts_left' => 5,
+                        'sent_at' => time()
+                    ];
+
+                    try {
+                        send_otp_email($email, (string)$row['username'], $otp);
+                    } catch (Exception $e) {
+                        clear_pending_2fa();
+                        header("Location: ../login.php?error=1");
+                        exit;
+                    }
+
+                    // Send user back to login page to enter OTP (modal popup)
+                    header("Location: ../login.php?twofa=1");
                     exit;
                 }
             }

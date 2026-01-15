@@ -29,6 +29,70 @@ if (!isset($pdo)) {
 $action = $_GET['action'] ?? '';
 
 switch ($action) {
+    case 'generateReferenceNumber':
+        // Generate a reference number for preview (final upon submission)
+        try {
+            $makeRef = function () {
+                return 'NFA' . date('Ymd') . strtoupper(substr(md5(uniqid(rand(), true)), 0, 6));
+            };
+
+            $reference_number = $makeRef();
+            // Ensure it's not already used (best-effort; collisions are extremely unlikely)
+            for ($i = 0; $i < 5; $i++) {
+                $stmt = $pdo->prepare('SELECT COUNT(*) FROM appointments WHERE reference_number = ?');
+                $stmt->execute([$reference_number]);
+                $exists = (int)$stmt->fetchColumn() > 0;
+                if (!$exists) break;
+                $reference_number = $makeRef();
+            }
+
+            echo json_encode(['success' => true, 'referenceNumber' => $reference_number]);
+        } catch (\PDOException $e) {
+            error_log('Reference generation failed: ' . $e->getMessage());
+            echo json_encode(['success' => false, 'error' => 'Failed to generate reference number.']);
+        }
+        break;
+
+    case 'checkUsername':
+        // Check if a username already exists (used by registration page)
+        try {
+            $username = (string)sanitize_input($_GET['username'] ?? '');
+            if ($username === '') {
+                echo json_encode(['success' => true, 'exists' => false]);
+                break;
+            }
+
+            $stmt = $pdo->prepare('SELECT 1 FROM users WHERE username = ? LIMIT 1');
+            $stmt->execute([$username]);
+            $exists = (bool)$stmt->fetchColumn();
+
+            echo json_encode(['success' => true, 'exists' => $exists]);
+        } catch (\PDOException $e) {
+            error_log('Username check failed: ' . $e->getMessage());
+            echo json_encode(['success' => false, 'error' => 'Failed to check username.']);
+        }
+        break;
+
+    case 'checkEmail':
+        // Check if an email is already registered (used by registration page)
+        try {
+            $email = (string)sanitize_input($_GET['email'] ?? '');
+            if ($email === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+                echo json_encode(['success' => true, 'exists' => false]);
+                break;
+            }
+
+            $stmt = $pdo->prepare('SELECT 1 FROM users WHERE email_address = ? LIMIT 1');
+            $stmt->execute([$email]);
+            $exists = (bool)$stmt->fetchColumn();
+
+            echo json_encode(['success' => true, 'exists' => $exists]);
+        } catch (\PDOException $e) {
+            error_log('Email check failed: ' . $e->getMessage());
+            echo json_encode(['success' => false, 'error' => 'Failed to check email.']);
+        }
+        break;
+
     case 'getRegions':
         // 1. Get Regions
         try {
@@ -127,13 +191,15 @@ switch ($action) {
             // D. Fetch Holidays (safely handle missing holidays table)
             error_log("DEBUG: Checking for holidays");
             $holidays = [];
+            $holiday_details = [];
             try {
-                $sql_holidays = "SELECT holiday_date FROM holidays WHERE holiday_date BETWEEN :start_date AND :end_date";
+                $sql_holidays = "SELECT holiday_date, holiday_name FROM holidays WHERE holiday_date BETWEEN :start_date AND :end_date";
                 $stmt_holidays = $pdo->prepare($sql_holidays);
                 $stmt_holidays->bindParam(':start_date', $start_date, PDO::PARAM_STR);
                 $stmt_holidays->bindParam(':end_date', $end_date, PDO::PARAM_STR);
                 $stmt_holidays->execute();
-                $holidays = array_column($stmt_holidays->fetchAll(PDO::FETCH_ASSOC), 'holiday_date');
+                $holiday_details = $stmt_holidays->fetchAll(PDO::FETCH_ASSOC);
+                $holidays = array_column($holiday_details, 'holiday_date');
             } catch (\PDOException $e) {
                 // If holidays table doesn't exist, just continue with empty holidays array
                 error_log("Notice: Holidays table may not exist: " . $e->getMessage());
@@ -182,7 +248,9 @@ switch ($action) {
                 'success' => true,
                 'capacity_info' => $volume_info,
                 'default_slot_capacity' => $default_capacity,
-                'daily_availability' => $availability_data
+                'daily_availability' => $availability_data,
+                'holidays' => $holidays,
+                'holiday_details' => $holiday_details
             ]);
 
         } catch (\PDOException $e) {
@@ -240,6 +308,7 @@ switch ($action) {
             'gender'         => sanitize_input($data_raw['gender'] ?? null),
             'volume'         => (float)sanitize_input($data_raw['volume'] ?? 0),
             'farmer_type_id' => (int)sanitize_input($data_raw['farmer_type_id'] ?? 0), 
+            'reference_number' => sanitize_input($data_raw['reference_number'] ?? ''),
         ];
         
         error_log("DEBUG: Processed data: " . json_encode($data));
@@ -290,7 +359,29 @@ switch ($action) {
             exit;
         }
         
-        $reference_number = 'NFA' . date('Ymd') . strtoupper(substr(md5(uniqid(rand(), true)), 0, 6));
+        $reference_number = null;
+        $client_ref = is_string($data['reference_number']) ? trim($data['reference_number']) : '';
+        if ($client_ref !== '' && preg_match('/^NFA\d{8}[A-Z0-9]{6}$/', $client_ref)) {
+            // Accept client pre-generated ref if not already used
+            $stmt_ref = $pdo->prepare('SELECT COUNT(*) FROM appointments WHERE reference_number = ?');
+            $stmt_ref->execute([$client_ref]);
+            $exists = (int)$stmt_ref->fetchColumn() > 0;
+            if (!$exists) {
+                $reference_number = $client_ref;
+            }
+        }
+
+        if (!$reference_number) {
+            $reference_number = 'NFA' . date('Ymd') . strtoupper(substr(md5(uniqid(rand(), true)), 0, 6));
+            // Best-effort uniqueness
+            for ($i = 0; $i < 5; $i++) {
+                $stmt_ref = $pdo->prepare('SELECT COUNT(*) FROM appointments WHERE reference_number = ?');
+                $stmt_ref->execute([$reference_number]);
+                $exists = (int)$stmt_ref->fetchColumn() > 0;
+                if (!$exists) break;
+                $reference_number = 'NFA' . date('Ymd') . strtoupper(substr(md5(uniqid(rand(), true)), 0, 6));
+            }
+        }
 
         try {
             $pdo->beginTransaction();
@@ -337,49 +428,153 @@ switch ($action) {
             $pdo->commit();
 
             // --- EMAIL NOTIFICATION LOGIC ---
+            $smtpHost = 'smtp.gmail.com';
+            $smtpUser = 'anonymous.00112211@gmail.com';
+            $smtpPass = 'xwucrpggtanqrvwp';
+            $smtpPort = 587;
+
+            $sessionWindow = ($data['time_slot'] === 'AM') ? '8:00 AM – 12:00 NN' : '1:00 PM – 5:00 PM';
+            $farmerFullName = trim($data['first_name'] . ' ' . ($data['middle_name'] ? ($data['middle_name'] . ' ') : '') . $data['last_name'] . ($data['suffix'] ? (' ' . $data['suffix']) : ''));
+
+            $branchName = 'Branch ID ' . $data['branch_id'];
             try {
-                // 1. Fetch Processor email for this specific branch
+                $stmt_branch = $pdo->prepare("SELECT branch_name FROM branch WHERE branch_id = ? LIMIT 1");
+                $stmt_branch->execute([$data['branch_id']]);
+                $branchRow = $stmt_branch->fetch(PDO::FETCH_ASSOC);
+                if ($branchRow && !empty($branchRow['branch_name'])) {
+                    $branchName = $branchRow['branch_name'];
+                }
+            } catch (Exception $e) {
+                // Best-effort only; keep branchName fallback.
+            }
+
+            $referenceSafe = htmlspecialchars($reference_number, ENT_QUOTES, 'UTF-8');
+            $farmerFullNameSafe = htmlspecialchars($farmerFullName, ENT_QUOTES, 'UTF-8');
+            $branchNameSafe = htmlspecialchars($branchName, ENT_QUOTES, 'UTF-8');
+            $dateSafe = htmlspecialchars($data['date'], ENT_QUOTES, 'UTF-8');
+            $slotSafe = htmlspecialchars($data['time_slot'], ENT_QUOTES, 'UTF-8');
+            $windowSafe = htmlspecialchars($sessionWindow, ENT_QUOTES, 'UTF-8');
+            $farmerIdSafe = htmlspecialchars($data['farmer_id'], ENT_QUOTES, 'UTF-8');
+            $volumeSafe = htmlspecialchars((string)$data['volume'], ENT_QUOTES, 'UTF-8');
+
+                        $confirmationDocHtml = "<!doctype html>
+<html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">
+<title>NFA Appointment Confirmation - {$referenceSafe}</title>
+<style>
+  body{font-family:Arial,Helvetica,sans-serif;color:#111;line-height:1.4;margin:0;padding:24px;background:#f6f7f9;}
+  .doc{max-width:820px;margin:0 auto;background:#fff;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;}
+  .hdr{padding:18px 22px;border-bottom:1px solid #e5e7eb;display:flex;gap:14px;align-items:center;}
+  .hdr h1{font-size:18px;margin:0;}
+  .sub{color:#6b7280;font-size:12px;margin-top:4px;}
+  .sec{padding:18px 22px;}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px 18px;}
+  .row{display:flex;justify-content:space-between;gap:12px;padding:10px 12px;border:1px solid #eef0f3;border-radius:10px;background:#fafafa;}
+  .k{color:#374151;font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:.04em;}
+  .v{font-weight:700;color:#0b6a2b;}
+  .note{margin-top:14px;color:#374151;font-size:13px;}
+  .muted{color:#6b7280;font-size:12px;}
+</style></head>
+<body>
+  <div class=\"doc\">
+    <div class=\"hdr\">
+      <div>
+        <h1>National Food Authority — Appointment Confirmation</h1>
+        <div class=\"sub\">System Version 1 • Last Updated: January 2026</div>
+      </div>
+    </div>
+    <div class=\"sec\">
+      <div class=\"grid\">
+                <div class=\"row\"><div class=\"k\">Reference No.</div><div class=\"v\">{$referenceSafe}</div></div>
+        <div class=\"row\"><div class=\"k\">Status</div><div class=\"v\">Pending Approval</div></div>
+                <div class=\"row\"><div class=\"k\">Branch</div><div>{$branchNameSafe}</div></div>
+                <div class=\"row\"><div class=\"k\">Date</div><div>{$dateSafe}</div></div>
+                <div class=\"row\"><div class=\"k\">Session</div><div>{$slotSafe} ({$windowSafe})</div></div>
+                <div class=\"row\"><div class=\"k\">Farmer</div><div>{$farmerFullNameSafe}</div></div>
+                <div class=\"row\"><div class=\"k\">Farmer ID</div><div>{$farmerIdSafe}</div></div>
+                <div class=\"row\"><div class=\"k\">Volume</div><div>{$volumeSafe} bags</div></div>
+      </div>
+      <p class=\"note\"><strong>Arrival guidance:</strong> You may arrive anytime within your selected session window. Please bring your Farmer ID and this confirmation.</p>
+      <p class=\"muted\">If you need corrections or assistance, contact your NFA branch or support@nfa.gov.ph.</p>
+    </div>
+  </div>
+</body></html>";
+
+            // 1) Notify processor (best-effort)
+            try {
                 $stmt_proc = $pdo->prepare("SELECT email_address FROM users WHERE branch_id = ? AND user_type = 'Processor' LIMIT 1");
                 $stmt_proc->execute([$data['branch_id']]);
                 $processor = $stmt_proc->fetch(PDO::FETCH_ASSOC);
 
                 if ($processor && !empty($processor['email_address'])) {
-                    $mail = new PHPMailer(true);
+                    $mailProc = new PHPMailer(true);
+                    $mailProc->isSMTP();
+                    $mailProc->Host = $smtpHost;
+                    $mailProc->SMTPAuth = true;
+                    $mailProc->Username = $smtpUser;
+                    $mailProc->Password = $smtpPass;
+                    $mailProc->SMTPSecure = PHPMailer::ENCRYPTION_STARTTLS;
+                    $mailProc->Port = $smtpPort;
 
-                    // Server settings
-                    $mail->isSMTP();
-                    $mail->Host       = 'smtp.gmail.com'; // Replace with your SMTP host
-                    $mail->SMTPAuth   = true;
-                    $mail->Username   = 'anonymous.00112211@gmail.com'; // Replace with system email
-                    $mail->Password   = 'xwucrpggtanqrvwp'; // Replace with App Password
-                    $mail->SMTPSecure = PHPMailer::ENCRYPTION_STARTTLS;
-                    $mail->Port       = 587;
-
-                    // Recipients
-                    $mail->setFrom('no-reply@nfa.gov.ph', 'NFA Appointment System');
-                    $mail->addAddress($processor['email_address']); 
-
-                    // Content
-                    $mail->isHTML(true);
-                    $mail->Subject = 'New Appointment: ' . $reference_number;
-                    $mail->Body    = "
+                    $mailProc->setFrom('no-reply@nfa.gov.ph', 'NFA Appointment System');
+                    $mailProc->addAddress($processor['email_address']);
+                    $mailProc->isHTML(true);
+                    $mailProc->Subject = 'New Appointment: ' . $reference_number;
+                    $mailProc->Body = "
                         <h3>New Farmer Appointment Notification</h3>
                         <p>An appointment has been scheduled and requires review.</p>
                         <ul>
-                            <li><strong>Farmer:</strong> {$data['first_name']} {$data['last_name']}</li>
+                            <li><strong>Farmer:</strong> {$farmerFullName}</li>
                             <li><strong>Reference #:</strong> {$reference_number}</li>
                             <li><strong>Date:</strong> {$data['date']}</li>
-                            <li><strong>Slot:</strong> {$data['time_slot']}</li>
+                            <li><strong>Slot:</strong> {$data['time_slot']} ({$sessionWindow})</li>
                             <li><strong>Volume:</strong> {$data['volume']} bags</li>
+                            <li><strong>Branch:</strong> {$branchName}</li>
                         </ul>
                         <p>Please log in to the portal to manage this appointment.</p>
                     ";
 
-                    $mail->send();
+                    $mailProc->send();
                 }
             } catch (Exception $e) {
-                // Log email error but do not fail the submission response
-                error_log("Email notification failed: " . $mail->ErrorInfo);
+                error_log("Processor email notification failed: " . $e->getMessage());
+            }
+
+            // 2) Confirmation email to farmer (best-effort)
+            try {
+                if (!empty($data['email'])) {
+                    $mailFarmer = new PHPMailer(true);
+                    $mailFarmer->isSMTP();
+                    $mailFarmer->Host = $smtpHost;
+                    $mailFarmer->SMTPAuth = true;
+                    $mailFarmer->Username = $smtpUser;
+                    $mailFarmer->Password = $smtpPass;
+                    $mailFarmer->SMTPSecure = PHPMailer::ENCRYPTION_STARTTLS;
+                    $mailFarmer->Port = $smtpPort;
+
+                    $mailFarmer->setFrom('no-reply@nfa.gov.ph', 'NFA Appointment System');
+                    $mailFarmer->addAddress($data['email']);
+                    $mailFarmer->isHTML(true);
+                    $mailFarmer->Subject = 'Appointment Request Received: ' . $reference_number;
+                    $mailFarmer->Body = "
+                        <p>Good day {$farmerFullName},</p>
+                        <p>Your appointment request has been received and is currently <strong>Pending Approval</strong>.</p>
+                        <ul>
+                            <li><strong>Reference No.:</strong> {$reference_number}</li>
+                            <li><strong>Date:</strong> {$data['date']}</li>
+                            <li><strong>Session:</strong> {$data['time_slot']} ({$sessionWindow})</li>
+                            <li><strong>Volume:</strong> {$data['volume']} bags</li>
+                            <li><strong>Branch:</strong> {$branchName}</li>
+                        </ul>
+                        <p>You may arrive anytime within your selected session window. Please bring your Farmer ID and a copy of your confirmation.</p>
+                        <p>Attached is your appointment confirmation document for printing or saving.</p>
+                        <p>Thank you.</p>
+                    ";
+
+                    $mailFarmer->addStringAttachment($confirmationDocHtml, 'Appointment_Confirmation_' . $reference_number . '.html', 'base64', 'text/html');
+                    $mailFarmer->send();
+                }
+            } catch (Exception $e) {
+                error_log("Farmer confirmation email failed: " . $e->getMessage());
             }
 
             echo json_encode(['success' => true, 'referenceNumber' => $reference_number]);

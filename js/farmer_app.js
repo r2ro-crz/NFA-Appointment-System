@@ -28,6 +28,9 @@ const appState = {
     selectedBranch: null,
     selectedDate: null,
     selectedTime: null,
+    holidays: [],
+    holidayNames: {},
+    referenceNumber: null,
     branchCapacity: {
         availableVolume: 0,
         amCapacity: 0,
@@ -39,6 +42,251 @@ const appState = {
     appointmentSummary: null
 };
 
+function getSessionWindowText(timeSlot) {
+        return (timeSlot === 'AM') ? '8:00 AM – 12:00 NN' : '1:00 PM – 5:00 PM';
+}
+
+function getConfirmationDocumentHtml() {
+        const summary = appState.appointmentSummary || {};
+        const referenceNumber = summary.referenceNumber || appState.referenceNumber || '—';
+        const fullName = summary.fullName || [summary.firstName, summary.middleName, summary.lastName, summary.suffix].filter(Boolean).join(' ') || '—';
+        const farmerId = summary.farmerId || '—';
+        const email = summary.email || '—';
+        const contact = summary.contact || '—';
+        const date = summary.date || '—';
+        const timeSlot = summary.timeSlot || '—';
+        const branchName = summary.branchName || `Branch ID ${summary.branchId || '—'}`;
+        const volume = (summary.volume !== undefined && summary.volume !== null && summary.volume !== '') ? `${summary.volume} bags` : '—';
+        const sessionWindow = (timeSlot === 'AM' || timeSlot === 'PM') ? getSessionWindowText(timeSlot) : '—';
+
+        const safe = (value) => String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+        return `<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>NFA Appointment Confirmation - ${safe(referenceNumber)}</title>
+    <style>
+        @page { size: A4; margin: 14mm; }
+        body { font-family: Arial, Helvetica, sans-serif; color: #111; margin: 0; background: #f6f7f9; }
+        .wrap { padding: 18px; }
+        .doc { max-width: 820px; margin: 0 auto; background: #fff; border: 1px solid #e5e7eb; border-radius: 12px; overflow: hidden; }
+        .hdr { padding: 18px 22px; border-bottom: 1px solid #e5e7eb; }
+        .hdr h1 { margin: 0; font-size: 18px; }
+        .hdr .sub { margin-top: 4px; color: #6b7280; font-size: 12px; }
+        .sec { padding: 18px 22px; }
+        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 18px; }
+        .row { display: flex; justify-content: space-between; gap: 12px; padding: 10px 12px; border: 1px solid #eef0f3; border-radius: 10px; background: #fafafa; }
+        .k { color: #374151; font-weight: 700; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+        .v { font-weight: 700; color: #0b6a2b; }
+        .note { margin-top: 14px; color: #374151; font-size: 13px; line-height: 1.45; }
+        .muted { margin-top: 10px; color: #6b7280; font-size: 12px; }
+        .foot { margin-top: 18px; padding-top: 12px; border-top: 1px dashed #e5e7eb; font-size: 12px; color: #6b7280; display: flex; justify-content: space-between; gap: 12px; }
+        @media print {
+            body { background: #fff; }
+            .wrap { padding: 0; }
+            .doc { border: none; border-radius: 0; }
+        }
+    </style>
+</head>
+<body>
+    <div class="wrap">
+        <div class="doc">
+            <div class="hdr">
+                <h1>National Food Authority — Appointment Confirmation</h1>
+                <div class="sub">System Version 1 • Last Updated: January 2026</div>
+            </div>
+            <div class="sec">
+                <div class="grid">
+                    <div class="row"><div class="k">Reference No.</div><div class="v">${safe(referenceNumber)}</div></div>
+                    <div class="row"><div class="k">Status</div><div class="v">Pending Approval</div></div>
+                    <div class="row"><div class="k">Branch</div><div>${safe(branchName)}</div></div>
+                    <div class="row"><div class="k">Date</div><div>${safe(date)}</div></div>
+                    <div class="row"><div class="k">Session</div><div>${safe(timeSlot)}${sessionWindow !== '—' ? ` (${safe(sessionWindow)})` : ''}</div></div>
+                    <div class="row"><div class="k">Volume</div><div>${safe(volume)}</div></div>
+                    <div class="row"><div class="k">Farmer</div><div>${safe(fullName)}</div></div>
+                    <div class="row"><div class="k">Farmer ID</div><div>${safe(farmerId)}</div></div>
+                    <div class="row"><div class="k">Email</div><div>${safe(email)}</div></div>
+                    <div class="row"><div class="k">Contact</div><div>${safe(contact)}</div></div>
+                </div>
+                <div class="note">
+                    <strong>Arrival guidance:</strong> You may arrive anytime within your selected session window. Please bring your Farmer ID and this confirmation.
+                </div>
+                <div class="muted">Keep this document for your records. For corrections, contact your NFA branch or support.</div>
+                <div class="foot">
+                    <div>Generated by NFA Appointment System</div>
+                    <div>${safe(new Date().toLocaleString())}</div>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>`;
+}
+
+function getConfirmationDocumentPrintMarkup() {
+                const summary = appState.appointmentSummary || {};
+                const referenceNumber = summary.referenceNumber || appState.referenceNumber || '—';
+                const fullName = summary.fullName || [summary.firstName, summary.middleName, summary.lastName, summary.suffix].filter(Boolean).join(' ') || '—';
+                const farmerId = summary.farmerId || '—';
+                const email = summary.email || '—';
+                const contact = summary.contact || '—';
+                const date = summary.date || '—';
+                const timeSlot = summary.timeSlot || '—';
+                const branchName = summary.branchName || `Branch ID ${summary.branchId || '—'}`;
+                const volume = (summary.volume !== undefined && summary.volume !== null && summary.volume !== '') ? `${summary.volume} bags` : '—';
+                const sessionWindow = (timeSlot === 'AM' || timeSlot === 'PM') ? getSessionWindowText(timeSlot) : '—';
+
+                const safe = (value) => String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+                return `
+<style>
+    @page { size: A4; margin: 14mm; }
+    .nfa-doc { font-family: Arial, Helvetica, sans-serif; color: #111; line-height: 1.4; }
+    .nfa-doc .doc { max-width: 820px; margin: 0 auto; background: #fff; border: 1px solid #e5e7eb; border-radius: 12px; overflow: hidden; }
+    .nfa-doc .hdr { padding: 18px 22px; border-bottom: 1px solid #e5e7eb; }
+    .nfa-doc .hdr h1 { margin: 0; font-size: 18px; }
+    .nfa-doc .hdr .sub { margin-top: 4px; color: #6b7280; font-size: 12px; }
+    .nfa-doc .sec { padding: 18px 22px; }
+    .nfa-doc .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 18px; }
+    .nfa-doc .row { display: flex; justify-content: space-between; gap: 12px; padding: 10px 12px; border: 1px solid #eef0f3; border-radius: 10px; background: #fafafa; }
+    .nfa-doc .k { color: #374151; font-weight: 700; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+    .nfa-doc .v { font-weight: 700; color: #0b6a2b; }
+    .nfa-doc .note { margin-top: 14px; color: #374151; font-size: 13px; line-height: 1.45; }
+    .nfa-doc .muted { margin-top: 10px; color: #6b7280; font-size: 12px; }
+</style>
+
+<div class="nfa-doc">
+    <div class="doc">
+        <div class="hdr">
+            <h1>National Food Authority — Appointment Confirmation</h1>
+            <div class="sub">System Version 1 • Last Updated: January 2026</div>
+        </div>
+        <div class="sec">
+            <div class="grid">
+                <div class="row"><div class="k">Reference No.</div><div class="v">${safe(referenceNumber)}</div></div>
+                <div class="row"><div class="k">Status</div><div class="v">Pending Approval</div></div>
+                <div class="row"><div class="k">Branch</div><div>${safe(branchName)}</div></div>
+                <div class="row"><div class="k">Date</div><div>${safe(date)}</div></div>
+                <div class="row"><div class="k">Session</div><div>${safe(timeSlot)}${sessionWindow !== '—' ? ` (${safe(sessionWindow)})` : ''}</div></div>
+                <div class="row"><div class="k">Volume</div><div>${safe(volume)}</div></div>
+                <div class="row"><div class="k">Farmer</div><div>${safe(fullName)}</div></div>
+                <div class="row"><div class="k">Farmer ID</div><div>${safe(farmerId)}</div></div>
+                <div class="row"><div class="k">Email</div><div>${safe(email)}</div></div>
+                <div class="row"><div class="k">Contact</div><div>${safe(contact)}</div></div>
+            </div>
+            <div class="note"><strong>Arrival guidance:</strong> You may arrive anytime within your selected session window. Please bring your Farmer ID and this confirmation.</div>
+            <div class="muted">Keep this document for your records.</div>
+        </div>
+    </div>
+</div>`;
+}
+
+function printHtmlViaHiddenIframe(html) {
+    const iframe = document.createElement('iframe');
+    iframe.style.position = 'fixed';
+    iframe.style.right = '0';
+    iframe.style.bottom = '0';
+    iframe.style.width = '0';
+    iframe.style.height = '0';
+    iframe.style.border = '0';
+    iframe.setAttribute('aria-hidden', 'true');
+    iframe.tabIndex = -1;
+
+    const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+
+    const cleanup = () => {
+        try { URL.revokeObjectURL(url); } catch (e) {}
+        try { iframe.remove(); } catch (e) {}
+    };
+
+    iframe.onload = () => {
+        try {
+            const win = iframe.contentWindow;
+            if (!win) {
+                cleanup();
+                return;
+            }
+
+            win.focus();
+            win.print();
+            setTimeout(cleanup, 1000);
+        } catch (e) {
+            cleanup();
+        }
+    };
+
+    document.body.appendChild(iframe);
+    iframe.src = url;
+}
+
+function openPrintWindowWithHtml(html) {
+    const w = window.open('', '_blank', 'noopener,noreferrer');
+    if (!w) return false;
+    w.document.open();
+    w.document.write(html);
+    w.document.close();
+    w.focus();
+    setTimeout(() => {
+        w.print();
+    }, 250);
+    return true;
+}
+
+function downloadHtmlFile(filename, html) {
+        const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+}
+
+// Exposed globally for inline onclick handlers
+window.printConfirmationDocument = function () {
+    const container = document.getElementById('printableConfirmation');
+    if (!container) {
+        // Fallback (should not happen)
+        const html = getConfirmationDocumentHtml();
+        const ok = openPrintWindowWithHtml(html);
+        if (!ok) alert('Print was blocked. Please allow pop-ups or try again.');
+        return;
+    }
+
+    if (!appState.appointmentSummary && !appState.referenceNumber) {
+        alert('No confirmation details to print yet. Please submit an appointment first.');
+        return;
+    }
+
+    const cleanup = () => {
+        document.body.classList.remove('printing-confirmation');
+        container.style.display = 'none';
+        container.innerHTML = '';
+    };
+
+    container.innerHTML = getConfirmationDocumentPrintMarkup();
+    container.style.display = 'block';
+    document.body.classList.add('printing-confirmation');
+
+    window.addEventListener('afterprint', cleanup, { once: true });
+    setTimeout(() => {
+        window.print();
+    }, 50);
+};
+
+window.downloadConfirmationDocument = function () {
+        const summary = appState.appointmentSummary || {};
+        const referenceNumber = summary.referenceNumber || appState.referenceNumber || 'CONFIRMATION';
+        const safeRef = String(referenceNumber).replace(/[^a-z0-9_-]/gi, '_');
+        const filename = `Appointment_Confirmation_${safeRef}.html`;
+        const html = getConfirmationDocumentHtml();
+        downloadHtmlFile(filename, html);
+};
 const apiBaseUrl = 'php_helper/api.php';
 let currentDate = new Date();
 
@@ -249,6 +497,14 @@ function changeMonth(direction) {
 }
 
 function selectDate(date, dayElement) {
+    const minSelectable = getMinAppointmentDate();
+    const selected = new Date(date);
+    selected.setHours(0, 0, 0, 0);
+    if (selected < minSelectable) {
+        alert('Appointments must be scheduled at least 1 day ahead. Please select a date starting tomorrow.');
+        return;
+    }
+
     // Remove selection from all days
     document.querySelectorAll('.calendar-day').forEach(day => {
         day.classList.remove('selected');
@@ -298,12 +554,16 @@ function updateSelectedSlotSummary() {
     const summary = document.getElementById('selectedSlotSummary');
     const dateDisplay = document.getElementById('summaryDateDisplay');
     const timeDisplay = document.getElementById('summaryTimeDisplay');
+    const windowDisplay = document.getElementById('summaryWindowDisplay');
     
     if (appState.selectedDate && appState.selectedTime) {
         dateDisplay.textContent = formatDateDisplay(appState.selectedDate);
-        timeDisplay.textContent = appState.selectedTime === 'AM' 
-            ? 'Morning (8:00 AM - 12:00 PM)' 
-            : 'Afternoon (1:00 PM - 5:00 PM)';
+        const isMorning = appState.selectedTime === 'AM';
+        timeDisplay.textContent = isMorning ? 'Morning Session (AM)' : 'Afternoon Session (PM)';
+
+        if (windowDisplay) {
+            windowDisplay.textContent = isMorning ? '8:00 AM - 12:00 PM' : '1:00 PM - 5:00 PM';
+        }
         
         summary.style.display = 'block';
         summary.style.animation = 'slideInUp 0.5s ease';
@@ -480,12 +740,28 @@ async function handleEnhancedFormSubmission(e) {
     
     if (result.success) {
         // Store appointment summary for confirmation page
+        const sessionLabel = (appState.selectedTime === 'AM') ? 'Morning' : 'Afternoon';
+        const fullName = [formData.firstName, (formData.middleName || '').trim(), formData.lastName, (formData.suffix || '').trim()]
+            .filter(part => part && String(part).trim().length > 0)
+            .join(' ');
         appState.appointmentSummary = {
             referenceNumber: result.referenceNumber,
             branch: appState.selectedBranch.name,
-            dateTime: `${formatDateDisplay(appState.selectedDate)} (${appState.selectedTime === 'AM' ? 'Morning' : 'Afternoon'})`,
-            farmerName: `${formData.firstName} ${formData.lastName}`,
-            farmerId: formData.farmer_id
+            branchName: appState.selectedBranch.name,
+            branchId: appState.selectedBranch.id,
+            date: formatDateDisplay(appState.selectedDate),
+            timeSlot: appState.selectedTime,
+            dateTime: `${formatDateDisplay(appState.selectedDate)} (${sessionLabel})`,
+            farmerName: fullName,
+            fullName,
+            firstName: formData.firstName,
+            middleName: formData.middleName,
+            lastName: formData.lastName,
+            suffix: formData.suffix,
+            farmerId: formData.farmer_id,
+            email: formData.email,
+            contact: formData.contact,
+            volume: formData.volume
         };
         
         // Update confirmation page
@@ -561,6 +837,9 @@ function prepareFormData() {
         branch_id: appState.selectedBranch.id,
         date: formatDate(appState.selectedDate),
         time_slot: appState.selectedTime,
+
+        // Reference number shown in UI (final upon submission)
+        reference_number: appState.referenceNumber || '',
         
         // Security
         g_recaptcha_response: (typeof grecaptcha !== 'undefined') ? grecaptcha.getResponse() : ''
@@ -585,6 +864,8 @@ function updateAppointmentSummary() {
         document.getElementById('summaryBranchFull').textContent = appState.selectedBranch.name;
         document.getElementById('summaryDateTime').textContent = 
             `${formatDateDisplay(appState.selectedDate)} (${appState.selectedTime === 'AM' ? 'Morning' : 'Afternoon'})`;
+
+        ensureReferenceNumber();
     }
 }
 
@@ -595,6 +876,8 @@ function resetBranchSelection() {
     
     document.getElementById('branchInfoCard').style.display = 'none';
     document.getElementById('capacityInfo').style.display = 'none';
+
+    resetReferenceNumber();
 }
 
 function disableBranchSelection() {
@@ -620,6 +903,8 @@ function resetCalendar() {
     document.querySelectorAll('.time-slot-card.selected').forEach(card => {
         card.classList.remove('selected');
     });
+
+    resetReferenceNumber();
 }
 
 function resetTimeSelection() {
@@ -631,6 +916,8 @@ function resetTimeSelection() {
     document.querySelectorAll('.time-slot-card.selected').forEach(card => {
         card.classList.remove('selected');
     });
+
+    resetReferenceNumber();
 }
 
 function hideAppointmentForm() {
@@ -639,6 +926,7 @@ function hideAppointmentForm() {
 
 function showAppointmentForm() {
     document.getElementById('appointmentForm').style.display = 'block';
+    ensureReferenceNumber();
 }
 
 function showLoadingOverlay() {
@@ -647,6 +935,38 @@ function showLoadingOverlay() {
 
 function hideLoadingOverlay() {
     document.getElementById('loadingOverlay').classList.remove('active');
+}
+
+function resetReferenceNumber() {
+    appState.referenceNumber = null;
+    const el = document.getElementById('summaryReferenceNumber');
+    if (el) el.textContent = '--';
+}
+
+async function ensureReferenceNumber() {
+    if (!appState.selectedBranch || !appState.selectedDate || !appState.selectedTime) return;
+
+    const el = document.getElementById('summaryReferenceNumber');
+    if (appState.referenceNumber) {
+        if (el) el.textContent = appState.referenceNumber;
+        return;
+    }
+
+    if (el) el.textContent = 'Generating...';
+
+    try {
+        const resp = await fetch(`${apiBaseUrl}?action=generateReferenceNumber`);
+        const data = await resp.json();
+        if (!data || !data.success || !data.referenceNumber) {
+            throw new Error((data && data.error) ? data.error : 'Failed to generate reference number');
+        }
+        appState.referenceNumber = data.referenceNumber;
+        if (el) el.textContent = appState.referenceNumber;
+    } catch (err) {
+        console.error('Reference number generation failed:', err);
+        appState.referenceNumber = null;
+        if (el) el.textContent = '--';
+    }
 }
 
 // --- Utility Functions (Keep from original but update as needed) ---
@@ -675,6 +995,22 @@ function formatNumber(number) {
     return new Intl.NumberFormat('en-PH', { maximumFractionDigits: 0 }).format(Math.round(number));
 }
 
+function getMinAppointmentDate() {
+    // Branches accept appointments at least 1 day ahead (tomorrow and beyond)
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const minDate = new Date(today);
+    minDate.setDate(minDate.getDate() + 1);
+
+    // Skip holidays (if holidays were returned by the API for the current view)
+    const holidaySet = new Set(Array.isArray(appState.holidays) ? appState.holidays : []);
+    while (holidaySet.size > 0 && holidaySet.has(formatDate(minDate))) {
+        minDate.setDate(minDate.getDate() + 1);
+    }
+
+    return minDate;
+}
+
 // --- Calendar Rendering & Time Slots ---
 function updateCalendarDisplay() {
     const monthNames = [
@@ -698,8 +1034,8 @@ function updateCalendarDisplay() {
     const firstDay = new Date(year, month, 1);
     const lastDay = new Date(year, month + 1, 0);
     const startWeekday = firstDay.getDay();
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    const minSelectable = getMinAppointmentDate();
+    const holidaySet = new Set(Array.isArray(appState.holidays) ? appState.holidays : []);
     
     // Leading blanks
     for (let i = 0; i < startWeekday; i++) {
@@ -713,15 +1049,35 @@ function updateCalendarDisplay() {
         const dateStr = formatDate(dateObj);
         const dayEl = document.createElement('div');
         dayEl.className = 'calendar-day';
-        dayEl.textContent = day;
+        const dayNumberEl = document.createElement('div');
+        dayNumberEl.className = 'day-number';
+        dayNumberEl.textContent = day;
+        dayEl.appendChild(dayNumberEl);
         
         const availability = appState.dateAvailability[dateStr];
         const isWeekend = dateObj.getDay() === 0 || dateObj.getDay() === 6;
-        const isPast = dateObj < today;
-        const isDisabled = isPast || (availability && availability.is_disabled);
+        const isHoliday = holidaySet.has(dateStr);
+        const isTooSoon = dateObj < minSelectable;
+        const isDisabled = isTooSoon || isHoliday || (availability && availability.is_disabled);
         
         if (isWeekend) {
             dayEl.classList.add('weekend');
+        }
+
+        if (isHoliday) {
+            dayEl.classList.add('holiday');
+
+            const holidayName = (appState.holidayNames && appState.holidayNames[dateStr])
+                ? appState.holidayNames[dateStr]
+                : 'Holiday';
+
+            dayEl.dataset.holiday = holidayName;
+            dayEl.title = holidayName;
+
+            const holidayLabel = document.createElement('div');
+            holidayLabel.className = 'day-holiday';
+            holidayLabel.textContent = holidayName;
+            dayEl.appendChild(holidayLabel);
         }
         
         if (isDisabled) {
@@ -871,11 +1227,27 @@ async function fetchBranchInfo(branchId) {
             dailyCapacity: (slotCap.capacity_am || 0) + (slotCap.capacity_pm || 0)
         };
         appState.dateAvailability = data.daily_availability || {};
+        appState.holidays = Array.isArray(data.holidays) ? data.holidays : [];
+
+        appState.holidayNames = {};
+        if (Array.isArray(data.holiday_details)) {
+            data.holiday_details.forEach((row) => {
+                const d = row && row.holiday_date;
+                if (!d) return;
+                appState.holidayNames[d] = (row.holiday_name || 'Holiday').toString();
+            });
+        }
         
         // Update capacity UI
         const totalCapacity = capacityInfo.total_capacity || 0;
         document.getElementById('availableVolume').textContent = `${formatNumber(appState.branchCapacity.availableVolume)} bags`;
         document.getElementById('warehouseCapacity').textContent = `${formatNumber(totalCapacity)} bags`;
+
+        const dailyAppointmentsEl = document.getElementById('dailyAppointments');
+        if (dailyAppointmentsEl) {
+            dailyAppointmentsEl.textContent = `${appState.branchCapacity.dailyCapacity} slots/day`;
+        }
+
         document.getElementById('amSlots').textContent = appState.branchCapacity.amCapacity;
         document.getElementById('pmSlots').textContent = appState.branchCapacity.pmCapacity;
         document.getElementById('totalSlots').textContent = appState.branchCapacity.dailyCapacity;

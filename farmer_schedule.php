@@ -6,6 +6,7 @@
     <link rel="icon" href="https://public-frontend-cos.metadl.com/mgx/img/favicon.png" type="image/png">
     <title>NFA Farmer's Appointment System - Schedule Your Visit</title>
     <link rel="stylesheet" href="css/style.css">
+    <link rel="stylesheet" href="css/legal_modal.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <!-- Google reCAPTCHA v2 -->
     <script src="https://www.google.com/recaptcha/api.js" async defer></script>
@@ -288,6 +289,10 @@
                                         <span>Unavailable</span>
                                     </div>
                                     <div class="legend-item">
+                                        <span class="legend-color holiday"></span>
+                                        <span>Holiday</span>
+                                    </div>
+                                    <div class="legend-item">
                                         <span class="legend-color weekend"></span>
                                         <span>Weekend</span>
                                     </div>
@@ -345,7 +350,7 @@
                                             <strong>Time:</strong> <span id="summaryTimeDisplay">--</span>
                                         </div>
                                         <div class="detail">
-                                            <strong>Duration:</strong> <span>4 hours</span>
+                                            <strong>Session Window:</strong> <span id="summaryWindowDisplay">--</span>
                                         </div>
                                     </div>
                                 </div>
@@ -396,7 +401,10 @@
                                         <i class="fas fa-id-card"></i>
                                         <div>
                                             <strong>Reference No.</strong>
-                                            <p class="reference-placeholder">Will be generated after submission</p>
+                                            <p class="reference-placeholder">
+                                                <span id="summaryReferenceNumber">--</span>
+                                                <span class="reference-note">(final upon submission)</span>
+                                            </p>
                                         </div>
                                     </div>
                                 </div>
@@ -520,11 +528,10 @@
                                         <ul>
                                             <li>Each bag should be properly labeled with your Farmer ID</li>
                                             <li>Rice should be properly dried and cleaned</li>
-                                            <li>Please arrive 30 minutes before your scheduled time</li>
+                                            <li>Arrive anytime within your selected session window (AM: 8:00 AM–12:00 NN, PM: 1:00 PM–5:00 PM)</li>
                                             <li>Bring your valid Farmer ID and appointment confirmation</li>
                                         </ul>
                                     </div>
-                                </div>
                                 
                                 <div class="form-section">
                                     <h5><i class="fas fa-shield-alt"></i> Security Verification</h5>
@@ -537,7 +544,7 @@
                                     
                                     <div class="privacy-notice">
                                         <i class="fas fa-lock"></i>
-                                        <p>Your information is secure and will only be used for your NFA appointment processing. By submitting, you agree to our <a href="#">Privacy Policy</a>.</p>
+                                        <p>Your information is secure and will only be used for your NFA appointment processing. By submitting, you agree to our <a href="#" data-legal-modal="privacy">Privacy Policy</a>.</p>
                                     </div>
                                 </div>
                                 
@@ -607,15 +614,18 @@
                                         <h4><i class="fas fa-list-check"></i> Next Steps</h4>
                                         <ol>
                                             <li>Check your email for the confirmation message</li>
-                                            <li>Print or save the appointment confirmation</li>
-                                            <li>Arrive 30 minutes before your scheduled time</li>
+                                            <li>Print or download your appointment confirmation for your records</li>
+                                            <li>Arrive anytime within your selected session window (AM: 8:00 AM–12:00 NN, PM: 1:00 PM–5:00 PM)</li>
                                             <li>Bring your Farmer ID and necessary documents</li>
                                         </ol>
                                     </div>
                                     
                                     <div class="confirmation-actions">
-                                        <button class="btn-print" onclick="window.print()">
+                                        <button class="btn-print" type="button" onclick="printConfirmationDocument()">
                                             <i class="fas fa-print"></i> Print Confirmation
+                                        </button>
+                                        <button class="btn-print" type="button" onclick="downloadConfirmationDocument()">
+                                            <i class="fas fa-download"></i> Download Confirmation
                                         </button>
                                         <button class="btn-new" onclick="resetForm()">
                                             <i class="fas fa-plus"></i> Schedule Another Appointment
@@ -647,7 +657,7 @@
                             <a href="mailto:support@nfa.gov.ph" class="contact-link">
                                 <i class="fas fa-envelope"></i> support@nfa.gov.ph
                             </a>
-                            <a href="#" class="contact-link">
+                            <a href="#" class="contact-link" data-legal-modal="contact">
                                 <i class="fas fa-comments"></i> Live Chat
                             </a>
                         </div>
@@ -668,14 +678,14 @@
                     </div>
                 </div>
                 <div class="footer-links">
-                    <a href="#">Privacy Policy</a>
-                    <a href="#">Terms of Service</a>
-                    <a href="#">FAQ</a>
-                    <a href="#">Contact Us</a>
+                    <a href="#" data-legal-modal="privacy">Privacy Policy</a>
+                    <a href="#" data-legal-modal="terms">Terms of Service</a>
+                    <a href="#" data-legal-modal="faq">FAQ</a>
+                    <a href="#" data-legal-modal="contact">Contact Us</a>
                 </div>
                 <div class="footer-info">
-                    <p><i class="fas fa-copyright"></i> 2025 National Food Authority. All rights reserved.</p>
-                    <p class="system-version">System Version 2.1.5 | Last Updated: March 2023</p>
+                    <p><i class="fas fa-copyright"></i> 2026 National Food Authority. All rights reserved.</p>
+                    <p class="system-version">System Version 1 | Last Updated: January 2026</p>
                 </div>
             </div>
         </div>
@@ -689,6 +699,10 @@
         </div>
     </div>
 
+    <!-- Printable Confirmation (rendered only during printing) -->
+    <div id="printableConfirmation" class="printable-confirmation" aria-hidden="true"></div>
+
     <script src="js/farmer_app.js"></script>
+    <script src="js/legal_modal.js"></script>
 </body>
 </html>
