@@ -1217,6 +1217,25 @@ body {
     border-color: var(--error-red);
 }
 
+.form-group input.valid, .form-group select.valid {
+    border-color: var(--nfa-green);
+}
+
+.form-group input.checking {
+    border-color: #f0ad4e;
+}
+
+.form-group .error-message,
+.form-group .status-message {
+    margin-top: 0.35rem;
+    font-size: 0.85rem;
+    line-height: 1.25;
+}
+
+.form-group .status-message {
+    color: #6b7280;
+}
+
 .volume-input-wrapper {
     position: relative;
 }

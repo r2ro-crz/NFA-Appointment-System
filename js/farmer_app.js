@@ -39,7 +39,13 @@ const appState = {
     },
     dateAvailability: {},
     farmerData: {},
-    appointmentSummary: null
+    appointmentSummary: null,
+    emailDomain: {
+        checking: false,
+        valid: null,
+        lastCheckedEmail: null,
+        lastMessage: ''
+    }
 };
 
 function getSessionWindowText(timeSlot) {
@@ -249,43 +255,44 @@ function downloadHtmlFile(filename, html) {
 
 // Exposed globally for inline onclick handlers
 window.printConfirmationDocument = function () {
-    const container = document.getElementById('printableConfirmation');
-    if (!container) {
-        // Fallback (should not happen)
-        const html = getConfirmationDocumentHtml();
-        const ok = openPrintWindowWithHtml(html);
-        if (!ok) alert('Print was blocked. Please allow pop-ups or try again.');
-        return;
-    }
-
-    if (!appState.appointmentSummary && !appState.referenceNumber) {
+    const summary = appState.appointmentSummary || {};
+    const ref = summary.referenceNumber || appState.referenceNumber;
+    if (!ref) {
         alert('No confirmation details to print yet. Please submit an appointment first.');
         return;
     }
 
-    const cleanup = () => {
-        document.body.classList.remove('printing-confirmation');
-        container.style.display = 'none';
-        container.innerHTML = '';
-    };
+    const farmerId = summary.farmerId || '';
+    const email = summary.email || '';
 
-    container.innerHTML = getConfirmationDocumentPrintMarkup();
-    container.style.display = 'block';
-    document.body.classList.add('printing-confirmation');
+    const url = new URL('appointment_confirmation_print.php', window.location.href);
+    url.searchParams.set('ref', String(ref));
+    url.searchParams.set('auto', '1');
+    if (farmerId) url.searchParams.set('farmer_id', String(farmerId));
+    if (email) url.searchParams.set('email', String(email));
 
-    window.addEventListener('afterprint', cleanup, { once: true });
-    setTimeout(() => {
-        window.print();
-    }, 50);
+    const w = window.open(url.toString(), '_blank', 'noopener,noreferrer');
+    if (!w) alert('Print was blocked. Please allow pop-ups or try again.');
 };
 
 window.downloadConfirmationDocument = function () {
-        const summary = appState.appointmentSummary || {};
-        const referenceNumber = summary.referenceNumber || appState.referenceNumber || 'CONFIRMATION';
-        const safeRef = String(referenceNumber).replace(/[^a-z0-9_-]/gi, '_');
-        const filename = `Appointment_Confirmation_${safeRef}.html`;
-        const html = getConfirmationDocumentHtml();
-        downloadHtmlFile(filename, html);
+    const summary = appState.appointmentSummary || {};
+    const ref = summary.referenceNumber || appState.referenceNumber;
+    if (!ref) {
+        alert('No confirmation details to download yet. Please submit an appointment first.');
+        return;
+    }
+
+    const farmerId = summary.farmerId || '';
+    const email = summary.email || '';
+
+    const url = new URL('appointment_confirmation_print.php', window.location.href);
+    url.searchParams.set('ref', String(ref));
+    url.searchParams.set('download', '1');
+    if (farmerId) url.searchParams.set('farmer_id', String(farmerId));
+    if (email) url.searchParams.set('email', String(email));
+
+    window.location.href = url.toString();
 };
 const apiBaseUrl = 'php_helper/api.php';
 let currentDate = new Date();
@@ -597,6 +604,9 @@ function validateStep2() {
 }
 
 function setupRealTimeValidation() {
+    setupContactNumberMasking();
+    setupEmailDomainValidation();
+
     // Email validation
     document.getElementById('email').addEventListener('blur', function() {
         validateEmail(this);
@@ -617,6 +627,150 @@ function setupRealTimeValidation() {
     });
 }
 
+function setupContactNumberMasking() {
+    const input = document.getElementById('contact');
+    if (!input || input.dataset.masked === '1') return;
+    input.dataset.masked = '1';
+
+    const allowedControlKeys = new Set([
+        'Backspace', 'Delete', 'Tab', 'Escape', 'Enter',
+        'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown',
+        'Home', 'End'
+    ]);
+
+    input.addEventListener('keydown', (e) => {
+        if (allowedControlKeys.has(e.key)) return;
+        if (e.ctrlKey || e.metaKey) return;
+
+        // Block letters/symbols from being entered.
+        if (!/^[0-9]$/.test(e.key)) {
+            e.preventDefault();
+            return;
+        }
+
+        // Stop at 11 digits.
+        const digits = normalizePHMobileDigits(input.value);
+        if (digits.length >= 11) {
+            e.preventDefault();
+        }
+    });
+
+    input.addEventListener('paste', (e) => {
+        e.preventDefault();
+        const text = (e.clipboardData || window.clipboardData).getData('text') || '';
+        input.value = formatPHMobile(normalizePHMobileDigits(text));
+        validateContactNumber(input);
+    });
+
+    input.addEventListener('input', () => {
+        const formatted = formatPHMobile(normalizePHMobileDigits(input.value));
+        if (input.value !== formatted) input.value = formatted;
+        validateContactNumber(input);
+    });
+}
+
+function normalizePHMobileDigits(value) {
+    const rawDigits = String(value || '').replace(/\D+/g, '');
+
+    // Normalize +63 / 63 into 09XXXXXXXXX.
+    if (rawDigits.startsWith('63') && rawDigits.length >= 12) {
+        return ('0' + rawDigits.slice(2)).slice(0, 11);
+    }
+
+    return rawDigits.slice(0, 11);
+}
+
+function formatPHMobile(digits) {
+    const d = String(digits || '').replace(/\D+/g, '').slice(0, 11);
+    if (d.length <= 4) return d;
+    if (d.length <= 7) return `${d.slice(0, 4)}-${d.slice(4)}`;
+    return `${d.slice(0, 4)}-${d.slice(4, 7)}-${d.slice(7)}`;
+}
+
+function setupEmailDomainValidation() {
+    const input = document.getElementById('email');
+    if (!input || input.dataset.domainWired === '1') return;
+    input.dataset.domainWired = '1';
+
+    let debounceTimer = null;
+    input.addEventListener('input', () => {
+        // Reset domain state as user edits.
+        appState.emailDomain.valid = null;
+        appState.emailDomain.checking = false;
+        appState.emailDomain.lastCheckedEmail = null;
+        appState.emailDomain.lastMessage = '';
+        input.classList.remove('valid', 'checking');
+        clearStatusMessage(input);
+
+        if (debounceTimer) clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(() => {
+            validateEmail(input);
+        }, 450);
+    });
+}
+
+function showStatusMessage(input, message) {
+    let statusElement = input.parentNode.querySelector('.status-message');
+    if (!statusElement) {
+        statusElement = document.createElement('div');
+        statusElement.className = 'status-message';
+        input.parentNode.appendChild(statusElement);
+    }
+    statusElement.textContent = message;
+}
+
+function clearStatusMessage(input) {
+    const statusElement = input.parentNode.querySelector('.status-message');
+    if (statusElement) statusElement.remove();
+}
+
+async function validateEmailDomainOnServer(email, input) {
+    if (appState.emailDomain.checking && appState.emailDomain.lastCheckedEmail === email) return;
+
+    appState.emailDomain.checking = true;
+    appState.emailDomain.valid = null;
+    appState.emailDomain.lastCheckedEmail = email;
+    appState.emailDomain.lastMessage = '';
+
+    input.classList.add('checking');
+    input.classList.remove('valid');
+    clearInputError(input);
+    showStatusMessage(input, 'Checking email domain…');
+
+    try {
+        const resp = await fetch(`${apiBaseUrl}?action=validateEmailDomain`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email })
+        });
+
+        const data = await resp.json().catch(() => null);
+        const ok = !!(data && data.success && data.valid === true);
+
+        appState.emailDomain.valid = ok;
+        appState.emailDomain.lastMessage = (data && data.message) ? String(data.message) : '';
+
+        if (ok) {
+            input.classList.remove('checking');
+            input.classList.add('valid');
+            clearStatusMessage(input);
+            clearInputError(input);
+        } else {
+            input.classList.remove('checking', 'valid');
+            clearStatusMessage(input);
+            showInputError(input, appState.emailDomain.lastMessage || 'Email domain does not appear to exist');
+        }
+    } catch (e) {
+        appState.emailDomain.valid = false;
+        appState.emailDomain.lastMessage = 'Unable to validate email domain right now. Please check the email and try again.';
+        input.classList.remove('checking', 'valid');
+        clearStatusMessage(input);
+        showInputError(input, appState.emailDomain.lastMessage);
+    } finally {
+        appState.emailDomain.checking = false;
+    }
+}
+
 function validateEmail(input) {
     const email = input.value.trim();
     const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -625,21 +779,58 @@ function validateEmail(input) {
         showInputError(input, 'Please enter a valid email address');
         return false;
     }
+
+    const domain = (email.split('@')[1] || '').toLowerCase();
+    const commonDomainTypos = {
+        'gmial.com': 'gmail.com',
+        'gmal.com': 'gmail.com',
+        'gmail.con': 'gmail.com',
+        'hotmial.com': 'hotmail.com',
+        'hotmal.com': 'hotmail.com',
+        'outlook.con': 'outlook.com',
+        'yaho.com': 'yahoo.com',
+        'yahoo.con': 'yahoo.com'
+    };
+
+    if (commonDomainTypos[domain]) {
+        showInputError(input, `Email domain looks incorrect. Did you mean ${email.replace(/@.*/, '@' + commonDomainTypos[domain])}?`);
+        return false;
+    }
+
+    // Require a realistic domain form.
+    if (!/^[a-z0-9.-]+\.[a-z]{2,}$/.test(domain) || domain.includes('..') || domain.startsWith('.') || domain.endsWith('.')) {
+        showInputError(input, 'Please enter an email with a valid domain (e.g., gmail.com)');
+        return false;
+    }
+
+    // If already validated for this email, accept.
+    if (appState.emailDomain.lastCheckedEmail === email && appState.emailDomain.valid === true) {
+        clearInputError(input);
+        clearStatusMessage(input);
+        input.classList.remove('checking');
+        input.classList.add('valid');
+        return true;
+    }
+
+    // Kick off async validation and block submission until it's done.
+    validateEmailDomainOnServer(email, input);
+    return false;
     
-    clearInputError(input);
-    return true;
+    // (Validation result will be applied asynchronously.)
 }
 
 function validateContactNumber(input) {
-    const contact = input.value.trim().replace(/[\s\-\(\)]/g, '');
-    const contactPattern = /^(09|\+639)\d{9}$/;
+    const contactDigits = normalizePHMobileDigits(input.value);
+    const contactPattern = /^09\d{9}$/;
     
-    if (!contactPattern.test(contact)) {
-        showInputError(input, 'Please enter a valid 11-digit Philippine mobile number');
+    if (!contactPattern.test(contactDigits) || contactDigits.length !== 11) {
+        showInputError(input, 'Please enter a valid Philippine mobile number (09XX-XXX-XXXX)');
+        input.classList.remove('valid');
         return false;
     }
     
     clearInputError(input);
+    input.classList.add('valid');
     return true;
 }
 
@@ -679,6 +870,8 @@ function validateVolumeInput() {
 
 function showInputError(input, message) {
     input.classList.add('error');
+    input.classList.remove('valid', 'checking');
+    clearStatusMessage(input);
     
     // Create or update error message
     let errorElement = input.parentNode.querySelector('.error-message');
@@ -855,6 +1048,11 @@ function updateConfirmationPage() {
         document.getElementById('confirmationDateTime').textContent = summary.dateTime;
         document.getElementById('confirmationName').textContent = summary.farmerName;
         document.getElementById('confirmationFarmerId').textContent = summary.farmerId;
+
+        const trackLink = document.getElementById('trackStatusLink');
+        if (trackLink && summary.referenceNumber) {
+            trackLink.href = `appointment_tracker.php?ref=${encodeURIComponent(summary.referenceNumber)}`;
+        }
     }
 }
 

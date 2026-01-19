@@ -148,8 +148,8 @@
 
           <h3>Contact options</h3>
           <ul>
-            <li><strong>Phone:</strong> (02) 8929-6701</li>
-            <li><strong>Email:</strong> support@nfa.gov.ph</li>
+            <li><strong>Phone:</strong> 0917 113 9347</li>
+            <li><strong>Email:</strong> <a href="mailto:publicaffairs@nfa.gov.ph" target="_blank" rel="noopener noreferrer">publicaffairs@nfa.gov.ph</a></li>
             <li><strong>Office hours:</strong> Monday – Friday, 8:00 AM – 5:00 PM</li>
           </ul>
 
@@ -251,6 +251,27 @@
 
     if (!backdrop.dataset.wired) {
       backdrop.dataset.wired = '1';
+
+      // Ensure mailto/tel links still work even if other handlers preventDefault.
+      // This is particularly useful for links inside modals/overlays.
+      document.addEventListener('click', (e) => {
+        const link = e.target && typeof e.target.closest === 'function'
+          ? e.target.closest('a[href^="mailto:"], a[href^="tel:"]')
+          : null;
+        if (!link) return;
+
+        const href = link.getAttribute('href');
+        if (!href) return;
+
+        e.preventDefault();
+        if (/^mailto:/i.test(href)) {
+          // Keep the portal open and trigger the email client in a new tab/window.
+          window.open(href, '_blank', 'noopener,noreferrer');
+          return;
+        }
+
+        window.location.href = href;
+      }, true);
 
       backdrop.addEventListener('click', (e) => {
         if (e.target === backdrop) closeModal();

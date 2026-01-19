@@ -54,8 +54,35 @@ document.addEventListener('DOMContentLoaded', () => {
     let reschedYear = null;
     let reschedMonth = null; // 1-12
     let availability = {};
+    let reschedHolidays = [];
+    let reschedHolidayNames = {};
     let selectedReschedDate = null;
     let selectedSlot = null;
+
+    const formatDateYmd = (date) => {
+        if (!date) return '';
+        const d = new Date(date);
+        const y = d.getFullYear();
+        const m = String(d.getMonth() + 1).padStart(2, '0');
+        const day = String(d.getDate()).padStart(2, '0');
+        return `${y}-${m}-${day}`;
+    };
+
+    const getMinReschedDate = () => {
+        // Align with farmer scheduling rules: at least 1 day ahead; skip holidays when computing min.
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+
+        const minDate = new Date(today);
+        minDate.setDate(minDate.getDate() + 1);
+
+        const holidaySet = new Set(Array.isArray(reschedHolidays) ? reschedHolidays : []);
+        while (holidaySet.size > 0 && holidaySet.has(formatDateYmd(minDate))) {
+            minDate.setDate(minDate.getDate() + 1);
+        }
+
+        return minDate;
+    };
 
     const openDetailsModal = (btn) => {
         // Only allow opening details from appointment cards (must have an appointment id)
@@ -83,17 +110,17 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Enable/disable actions based on status
         const statusLower = currentStatus.toLowerCase();
-        const isConfirmed = statusLower === 'confirmed';
+        const isConfirmedLike = (statusLower === 'confirmed' || statusLower === 'rescheduled');
 
         if (btnConfirm) {
-            btnConfirm.disabled = isConfirmed;
+            btnConfirm.disabled = isConfirmedLike;
         }
         if (btnReschedule) {
-            btnReschedule.disabled = isConfirmed;
+            btnReschedule.disabled = isConfirmedLike;
         }
         if (btnReceive) {
             // Only allow receive for confirmed appointments
-            btnReceive.disabled = !isConfirmed;
+            btnReceive.disabled = !isConfirmedLike;
         }
 
         modal.style.display = 'flex';
@@ -115,13 +142,56 @@ document.addEventListener('DOMContentLoaded', () => {
         return response.json();
     };
 
+    const withLoading = async (message, disableEls, fn) => {
+        const api = window.NFALoading;
+        if (api && typeof api.withLoading === 'function') {
+            return api.withLoading(fn, { message: message, disable: disableEls });
+        }
+
+        const els = Array.isArray(disableEls) ? disableEls : (disableEls ? [disableEls] : []);
+        const prev = els.map(el => ({ el, disabled: !!el?.disabled }));
+        try {
+            els.forEach(el => { if (el) el.disabled = true; });
+            return await fn();
+        } finally {
+            prev.forEach(({ el, disabled }) => { if (el) el.disabled = disabled; });
+        }
+    };
+
+    const broadcastAndReload = (reason) => {
+        try {
+            if (typeof window.publishAppointmentsRefresh === 'function') {
+                window.publishAppointmentsRefresh({ reason: reason || 'updated' });
+            }
+        } catch (e) {
+            // ignore
+        }
+
+        // Ensure this page reflects calendar/tile counts immediately.
+        setTimeout(() => {
+            try { window.location.reload(); } catch (e) {}
+        }, 650);
+    };
+
     // Confirm appointment
     if (btnConfirm) {
         btnConfirm.addEventListener('click', async () => {
             if (!currentAppointmentId) return;
-            if (!confirm('Confirm this appointment?')) return;
-            try {
-                const result = await postJson('confirmAppointment', { appointment_id: currentAppointmentId });
+            const ok = (typeof confirmDialog === 'function')
+                ? await confirmDialog({
+                    title: 'Confirm Appointment',
+                    message: 'Confirming will lock this appointment (reschedule becomes disabled) and allow receiving. Continue?',
+                    confirmText: 'Confirm',
+                    cancelText: 'Cancel',
+                    tone: 'primary'
+                })
+                : confirm('Confirm this appointment?');
+
+            if (!ok) return;
+
+            await withLoading('Confirming appointment (and notifying farmer)…', [btnConfirm, btnReschedule, btnReceive], async () => {
+                try {
+                    const result = await postJson('confirmAppointment', { appointment_id: currentAppointmentId });
                 if (result && result.success) {
                     // Update local state and UI without reloading the page
                     currentStatus = 'confirmed';
@@ -145,13 +215,22 @@ document.addEventListener('DOMContentLoaded', () => {
                         cardBtn.dataset.status = 'confirmed';
                     }
 
-                    alert('Appointment confirmed.');
+                    if (typeof showToast === 'function') {
+                        showToast('Appointment confirmed.', 'success');
+                    }
+
+                    broadcastAndReload('confirmed');
                 } else {
-                    alert(result.error || 'Failed to confirm appointment.');
+                    if (typeof showToast === 'function') {
+                        showToast(result.error || 'Failed to confirm appointment.', 'error');
+                    }
                 }
-            } catch (err) {
-                alert('Error confirming appointment.');
-            }
+                } catch (err) {
+                    if (typeof showToast === 'function') {
+                        showToast('Error confirming appointment.', 'error');
+                    }
+                }
+            });
         });
     }
 
@@ -180,17 +259,35 @@ document.addEventListener('DOMContentLoaded', () => {
     if (receiveSubmit) {
         receiveSubmit.addEventListener('click', async () => {
             if (!currentAppointmentId) return;
-            const newVolume = parseFloat(receiveInput.value || '0');
-            if (!newVolume || newVolume < 0) {
-                alert('Please enter a valid number of bags.');
+            const newVolume = parseFloat(receiveInput?.value ?? '');
+            if (Number.isNaN(newVolume) || newVolume < 0) {
+                if (typeof showToast === 'function') {
+                    showToast('Please enter a valid number of bags.', 'warning');
+                } else {
+                    alert('Please enter a valid number of bags.');
+                }
+                receiveInput && receiveInput.focus();
                 return;
             }
-            try {
-                const result = await postJson('completeAppointment', {
-                    appointment_id: currentAppointmentId,
-                    volume: newVolume
-                });
-                if (result && result.success) {
+
+            const ok = (typeof confirmDialog === 'function')
+                ? await confirmDialog({
+                    title: 'Submit Delivery',
+                    message: `Record ${newVolume.toLocaleString()} bag(s) received and mark this appointment as Completed?`,
+                    confirmText: 'Yes, Submit',
+                    cancelText: 'Cancel',
+                    tone: 'primary'
+                })
+                : confirm('Submit delivery and mark appointment as completed?');
+            if (!ok) return;
+
+            await withLoading('Submitting delivery (and emailing farmer)…', [receiveSubmit, btnConfirm, btnReschedule, btnReceive], async () => {
+                try {
+                    const result = await postJson('completeAppointment', {
+                        appointment_id: currentAppointmentId,
+                        volume: newVolume
+                    });
+                    if (result && result.success) {
                     // Update local state and UI without reloading the page
                     currentVolume = newVolume;
 
@@ -229,13 +326,22 @@ document.addEventListener('DOMContentLoaded', () => {
                     }
 
                     closeReceiveModal();
-                    alert('Delivery recorded successfully.');
-                } else {
-                    alert(result.error || 'Failed to record delivery.');
+                    if (typeof showToast === 'function') {
+                        showToast('Delivery recorded successfully.', 'success');
+                    }
+
+                    broadcastAndReload('completed');
+                    } else {
+                        if (typeof showToast === 'function') {
+                            showToast(result.error || 'Failed to record delivery.', 'error');
+                        }
+                    }
+                } catch (err) {
+                    if (typeof showToast === 'function') {
+                        showToast('Error recording delivery.', 'error');
+                    }
                 }
-            } catch (err) {
-                alert('Error recording delivery.');
-            }
+            });
         });
     }
 
@@ -268,16 +374,30 @@ document.addEventListener('DOMContentLoaded', () => {
         reschedMonthLabel.textContent = new Date(startDate).toLocaleString('default', { month: 'long' });
         reschedYearLabel.textContent = String(reschedYear);
 
-        try {
-            const url = `${apiBase}?action=getBranchInfo&branch_id=${encodeURIComponent(branchId)}&start_date=${encodeURIComponent(startDate)}&end_date=${encodeURIComponent(endDate)}`;
-            const response = await fetch(url);
-            const data = await response.json();
-            availability = (data && data.success && data.daily_availability) ? data.daily_availability : {};
-            renderReschedGrid(startDate, lastDay);
-        } catch (err) {
-            availability = {};
-            renderReschedGrid(startDate, lastDay);
-        }
+        await withLoading('Loading schedule availability…', [reschedPrev, reschedNext], async () => {
+            try {
+                const url = `${apiBase}?action=getBranchInfo&branch_id=${encodeURIComponent(branchId)}&start_date=${encodeURIComponent(startDate)}&end_date=${encodeURIComponent(endDate)}`;
+                const response = await fetch(url);
+                const data = await response.json();
+                availability = (data && data.success && data.daily_availability) ? data.daily_availability : {};
+
+                reschedHolidays = (data && data.success && Array.isArray(data.holidays)) ? data.holidays : [];
+                reschedHolidayNames = {};
+                if (data && data.success && Array.isArray(data.holiday_details)) {
+                    data.holiday_details.forEach((row) => {
+                        const d = row && row.holiday_date;
+                        if (!d) return;
+                        reschedHolidayNames[d] = (row.holiday_name || 'Holiday').toString();
+                    });
+                }
+                renderReschedGrid(startDate, lastDay);
+            } catch (err) {
+                availability = {};
+                reschedHolidays = [];
+                reschedHolidayNames = {};
+                renderReschedGrid(startDate, lastDay);
+            }
+        });
     };
 
     const renderReschedGrid = (startDate, daysInMonth) => {
@@ -286,9 +406,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const monthIndex = firstDay.getMonth(); // 0-11
         const weekdays = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        const minDate = new Date(today.getTime() + 24 * 60 * 60 * 1000); // 1 day ahead
+        const minDate = getMinReschedDate();
+        const holidaySet = new Set(Array.isArray(reschedHolidays) ? reschedHolidays : []);
 
         reschedGrid.innerHTML = '';
 
@@ -311,17 +430,19 @@ document.addEventListener('DOMContentLoaded', () => {
         for (let d = 1; d <= totalDays; d++) {
             const dateStr = `${year}-${String(monthIndex + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
             const info = availability[dateStr];
+            const hasInfo = !!info;
 
             const dateObj = new Date(dateStr + 'T00:00:00');
             const isWeekend = dateObj.getDay() === 0 || dateObj.getDay() === 6;
             const isBeforeMin = dateObj < minDate;
+            const isHoliday = holidaySet.has(dateStr);
 
             const cell = document.createElement('a');
             cell.href = 'javascript:void(0)';
             let classes = 'calendar-cell calendar-day';
 
             const disabledByAvailability = info ? info.is_disabled : false;
-            const disabled = disabledByAvailability || isWeekend || isBeforeMin;
+            const disabled = !hasInfo || disabledByAvailability || isWeekend || isBeforeMin || isHoliday;
             if (disabled) {
                 classes += ' disabled';
             } else {
@@ -331,6 +452,20 @@ document.addEventListener('DOMContentLoaded', () => {
             cell.className = classes;
             cell.dataset.date = dateStr;
 
+            if (isWeekend) {
+                cell.classList.add('weekend');
+            }
+
+            if (isHoliday) {
+                const holidayName = (reschedHolidayNames && reschedHolidayNames[dateStr])
+                    ? reschedHolidayNames[dateStr]
+                    : 'Holiday';
+
+                cell.classList.add('holiday');
+                cell.dataset.holiday = holidayName;
+                cell.title = holidayName;
+            }
+
             const num = document.createElement('div');
             num.className = 'day-number';
             num.textContent = d;
@@ -339,7 +474,7 @@ document.addEventListener('DOMContentLoaded', () => {
             // In reschedule calendar we only show plain disabled/enabled tiles, no counts
 
             cell.addEventListener('click', () => {
-                if (disabled || !info) return;
+                if (disabled) return;
                 selectedReschedDate = dateStr;
                 // Update selected styling
                 document.querySelectorAll('#reschedGrid .calendar-day').forEach(el => el.classList.remove('selected'));
@@ -419,15 +554,17 @@ document.addEventListener('DOMContentLoaded', () => {
     if (reschedSubmit) {
         reschedSubmit.addEventListener('click', async () => {
             if (!currentAppointmentId || !selectedReschedDate || !selectedSlot) return;
-            try {
-                const result = await postJson('rescheduleAppointment', {
-                    appointment_id: currentAppointmentId,
-                    date: selectedReschedDate,
-                    time_slot: selectedSlot
-                });
-                if (result && result.success) {
+
+            await withLoading('Rescheduling appointment (and notifying farmer)…', [reschedSubmit, btnConfirm, btnReschedule, btnReceive], async () => {
+                try {
+                    const result = await postJson('rescheduleAppointment', {
+                        appointment_id: currentAppointmentId,
+                        date: selectedReschedDate,
+                        time_slot: selectedSlot
+                    });
+                    if (result && result.success) {
                     // Update local state and UI without navigating away
-                    currentStatus = 'confirmed';
+                    currentStatus = 'rescheduled';
                     currentDateIso = selectedReschedDate;
 
                     const dateObj = new Date(selectedReschedDate + 'T00:00:00');
@@ -444,7 +581,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         modalSlot.textContent = selectedSlot === 'PM' ? 'Afternoon' : 'Morning';
                     }
                     if (modalStatus) {
-                        modalStatus.textContent = 'Confirmed';
+                        modalStatus.textContent = 'Rescheduled';
                     }
 
                     if (btnConfirm) {
@@ -462,7 +599,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         cardBtn.dataset.dateIso = selectedReschedDate;
                         cardBtn.dataset.date = formattedDate;
                         cardBtn.dataset.slot = selectedSlot === 'PM' ? 'Afternoon' : 'Morning';
-                        cardBtn.dataset.status = 'confirmed';
+                        cardBtn.dataset.status = 'rescheduled';
 
                         const card = cardBtn.closest('.appointment-card');
                         if (card) {
@@ -481,13 +618,22 @@ document.addEventListener('DOMContentLoaded', () => {
                     }
 
                     closeReschedModal();
-                    alert('Appointment rescheduled successfully. Refresh the calendar if needed to see it on the new date.');
-                } else {
-                    alert(result.error || 'Failed to reschedule appointment.');
+                    if (typeof showToast === 'function') {
+                        showToast('Appointment rescheduled successfully.', 'success');
+                    }
+
+                    broadcastAndReload('rescheduled');
+                    } else {
+                        if (typeof showToast === 'function') {
+                            showToast(result.error || 'Failed to reschedule appointment.', 'error');
+                        }
+                    }
+                } catch (err) {
+                    if (typeof showToast === 'function') {
+                        showToast('Error rescheduling appointment.', 'error');
+                    }
                 }
-            } catch (err) {
-                alert('Error rescheduling appointment.');
-            }
+            });
         });
     }
 

@@ -149,7 +149,7 @@ $new_count = count(array_filter($notifications, fn($n) => (empty($n['is_read']) 
                     <i class="fas fa-chart-line"></i>
                     <span>Dashboard</span>
                 </a>
-                <a href="operator.php" class="nav-link active">
+                <a href="appointments.php" class="nav-link active">
                     <i class="fas fa-calendar-check"></i>
                     <span>Appointments</span>
                 </a>
@@ -192,7 +192,7 @@ $new_count = count(array_filter($notifications, fn($n) => (empty($n['is_read']) 
                                 $time_label = $n['time_slot'] == 'AM' ? 'Morning' : 'Afternoon';
                             ?>
                                 <a class="notif-item <?php echo $unread ? 'unread' : ''; ?>"
-                                   href="operator.php?view=<?php echo (int)$n['appointment_id']; ?>"
+                                   href="appointments.php?view=<?php echo (int)$n['appointment_id']; ?>"
                                    data-appointment-id="<?php echo (int)$n['appointment_id']; ?>"
                                    data-is-read="<?php echo $unread ? '0' : '1'; ?>">
                                     <div class="notif-icon-small">
@@ -236,7 +236,7 @@ $new_count = count(array_filter($notifications, fn($n) => (empty($n['is_read']) 
                         <?php endif; ?>
                     </div>
                     <div class="notif-footer">
-                        <a href="operator.php" class="view-all">
+                        <a href="appointments.php" class="view-all">
                             <i class="fas fa-list"></i> View All Appointments
                         </a>
                     </div>
@@ -289,12 +289,12 @@ $new_count = count(array_filter($notifications, fn($n) => (empty($n['is_read']) 
                         <p>Select a date tile to see all appointments in detail.</p>
                     </div>
                     <div class="calendar-nav">
-                        <a href="operator.php?month=<?php echo $prevMonth; ?>&year=<?php echo $prevYear; ?>" class="btn-nav-month"><i class="fas fa-chevron-left"></i></a>
+                        <a href="appointments.php?month=<?php echo $prevMonth; ?>&year=<?php echo $prevYear; ?>" class="btn-nav-month"><i class="fas fa-chevron-left"></i></a>
                         <div class="calendar-current">
                             <span class="month-name"><?php echo htmlspecialchars($monthName); ?></span>
                             <span class="year-label"><?php echo $year; ?></span>
                         </div>
-                        <a href="operator.php?month=<?php echo $nextMonth; ?>&year=<?php echo $nextYear; ?>" class="btn-nav-month"><i class="fas fa-chevron-right"></i></a>
+                        <a href="appointments.php?month=<?php echo $nextMonth; ?>&year=<?php echo $nextYear; ?>" class="btn-nav-month"><i class="fas fa-chevron-right"></i></a>
                     </div>
                 </header>
 
@@ -333,7 +333,7 @@ $new_count = count(array_filter($notifications, fn($n) => (empty($n['is_read']) 
                         if ($hasData) $classes .= ' has-appointments';
                         if ($isToday) $classes .= ' today';
 
-                        echo '<a href="operator.php?date=' . $dateStr . '&month=' . $month . '&year=' . $year . '" class="' . $classes . '">';
+                        echo '<a href="appointments.php?date=' . $dateStr . '&month=' . $month . '&year=' . $year . '" class="' . $classes . '">';
                         echo '<div class="day-number">' . $day . '</div>';
                         if ($hasData && ($amCount > 0 || $pmCount > 0)) {
                             echo '<div class="slot-pills">';
@@ -359,7 +359,7 @@ $new_count = count(array_filter($notifications, fn($n) => (empty($n['is_read']) 
                         <p>Click a tile to view full farmer details.</p>
                     </div>
                     <div class="appointments-actions">
-                        <a href="operator.php?month=<?php echo $month; ?>&year=<?php echo $year; ?>" class="btn-outline-secondary"><i class="fas fa-calendar"></i> Back to Calendar</a>
+                        <a href="appointments.php?month=<?php echo $month; ?>&year=<?php echo $year; ?>" class="btn-outline-secondary"><i class="fas fa-calendar"></i> Back to Calendar</a>
                     </div>
                 </header>
 
@@ -367,7 +367,7 @@ $new_count = count(array_filter($notifications, fn($n) => (empty($n['is_read']) 
                     <div class="empty-state">
                         <i class="fas fa-calendar-times"></i>
                         <p>No appointments for this date.</p>
-                        <a href="operator.php?month=<?php echo $month; ?>&year=<?php echo $year; ?>" class="btn-outline">
+                        <a href="appointments.php?month=<?php echo $month; ?>&year=<?php echo $year; ?>" class="btn-outline">
                             <i class="fas fa-arrow-left"></i> Back to Calendar
                         </a>
                     </div>
@@ -377,8 +377,15 @@ $new_count = count(array_filter($notifications, fn($n) => (empty($n['is_read']) 
                             $fullName = trim($appt['first_name'] . ' ' . $appt['middle_name'] . ' ' . $appt['last_name'] . ' ' . $appt['suffix']);
                             $slotLabel = strtoupper($appt['time_slot']) === 'PM' ? 'Afternoon' : 'Morning';
                             $isHighlight = isset($highlightId) && $highlightId && (int)$appt['appointment_id'] === $highlightId;
+
+                            $statusRaw = isset($appt['status']) ? strtolower((string)$appt['status']) : '';
+                            $statusLabel = $statusRaw !== '' ? ucfirst($statusRaw) : 'Unknown';
+                            $statusClass = 'status-' . preg_replace('/[^a-z0-9\-]/', '', $statusRaw);
                         ?>
                             <div class="appointment-card<?php echo $isHighlight ? ' highlight' : ''; ?>" data-appointment-id="<?php echo (int)$appt['appointment_id']; ?>">
+                                <span class="appt-status-badge <?php echo htmlspecialchars($statusClass); ?>">
+                                    <?php echo htmlspecialchars($statusLabel); ?>
+                                </span>
                                 <div class="appointment-main">
                                     <div class="appointment-name"><?php echo htmlspecialchars($fullName); ?></div>
                                     <div class="appointment-ref">Ref: <?php echo htmlspecialchars($appt['reference_number']); ?></div>
@@ -517,7 +524,9 @@ $new_count = count(array_filter($notifications, fn($n) => (empty($n['is_read']) 
         window.userId = <?php echo json_encode((int)($user_id ?? 0)); ?>;
         window.branchId = <?php echo json_encode((int)$branch_id); ?>;
     </script>
+    <script src="js/loading_ui.js?v=<?php echo urlencode((string)@filemtime(__DIR__ . '/js/loading_ui.js')); ?>"></script>
+    <script src="js/refresh_bus.js?v=<?php echo urlencode((string)@filemtime(__DIR__ . '/js/refresh_bus.js')); ?>"></script>
     <script src="js/processor.js?v=<?php echo urlencode((string)@filemtime(__DIR__ . '/js/processor.js')); ?>"></script>
-    <script src="js/operator.js?v=<?php echo urlencode((string)@filemtime(__DIR__ . '/js/operator.js')); ?>"></script>
+    <script src="js/appointments.js?v=<?php echo urlencode((string)@filemtime(__DIR__ . '/js/appointments.js')); ?>"></script>
 </body>
 </html>

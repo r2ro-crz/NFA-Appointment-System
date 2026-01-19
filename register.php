@@ -104,7 +104,7 @@ try {
                         </div>
                         <div class="feature-content">
                             <h3>Need Help?</h3>
-                            <p>Contact IT Support at <strong>(02) 8929-6701</strong></p>
+                            <p>Contact IT Support at <strong>0917 113 9347</strong></p>
                         </div>
                     </div>
                 </div>
@@ -681,7 +681,7 @@ try {
                     </a>
                 </div>
                 <div class="footer-info">
-                    <p><i class="fas fa-info-circle"></i> For assistance, contact IT Support: (02) 8929-6701</p>
+                    <p><i class="fas fa-info-circle"></i> For assistance, contact IT Support: 0917 113 9347</p>
                 </div>
             </div>
         </div>
@@ -695,6 +695,7 @@ try {
         </div>
     </div>
 
+    <script src="js/loading_ui.js?v=<?php echo urlencode((string)@filemtime(__DIR__ . '/js/loading_ui.js')); ?>"></script>
     <script src="js/register_app.js"></script>
 </body>
 </html>

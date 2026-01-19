@@ -11,7 +11,7 @@
     <!-- Google reCAPTCHA v2 -->
     <script src="https://www.google.com/recaptcha/api.js" async defer></script>
 </head>
-<body>
+<body data-clear-inputs="true">
     <!-- Progress tracking -->
     <div class="progress-tracker">
         <div class="progress-bar" id="progressBar"></div>
@@ -46,6 +46,9 @@
                 </div>
             </div>
             <div class="header-actions">
+                <a href="appointment_tracker.php" class="main-btn">
+                    <i class="fas fa-route"></i> Track Status
+                </a>
                 <a href="landing.html" class="main-btn">
                     <i class="fas fa-home"></i> Main Portal
                 </a>
@@ -474,9 +477,9 @@
                                             </label>
                                             <select id="gender" name="gender" required>
                                                 <option value="">Select Gender</option>
-                                                <option value="male">Male</option>
-                                                <option value="female">Female</option>
-                                                <option value="other">Prefer not to say</option>
+                                                <option value="Male">Male</option>
+                                                <option value="Female">Female</option>
+                                                <option value="Other">Prefer not to say</option>
                                             </select>
                                         </div>
                                     </div>
@@ -489,16 +492,16 @@
                                             <label for="email">
                                                 <i class="fas fa-envelope"></i> Email Address *
                                             </label>
-                                            <input type="email" id="email" name="email" required placeholder="example@email.com">
-                                            <div class="form-hint">Confirmation will be sent to this email</div>
+                                            <input type="email" id="email" name="email" required placeholder="name@example.com" autocomplete="email" inputmode="email" autocapitalize="none" spellcheck="false" aria-describedby="emailHint">
+                                            <div class="form-hint" id="emailHint">Confirmation will be sent to this email. Please ensure the domain is correct and exists.</div>
                                         </div>
                                         
                                         <div class="form-group">
                                             <label for="contact">
                                                 <i class="fas fa-phone"></i> Contact Number *
                                             </label>
-                                            <input type="tel" id="contact" name="contact" required placeholder="09XX XXX XXXX">
-                                            <div class="form-hint">Philippine mobile number format</div>
+                                            <input type="tel" id="contact" name="contact" required placeholder="09XX-XXX-XXXX" autocomplete="tel" inputmode="numeric" maxlength="13" pattern="^09\d{2}-\d{3}-\d{4}$" aria-describedby="contactHint">
+                                            <div class="form-hint" id="contactHint">Format: 09XX-XXX-XXXX (11 digits). Letters are not allowed.</div>
                                         </div>
                                     </div>
                                 </div>
@@ -627,6 +630,9 @@
                                         <button class="btn-print" type="button" onclick="downloadConfirmationDocument()">
                                             <i class="fas fa-download"></i> Download Confirmation
                                         </button>
+                                        <a id="trackStatusLink" href="appointment_tracker.php" class="btn-print">
+                                            <i class="fas fa-route"></i> Track Status
+                                        </a>
                                         <button class="btn-new" onclick="resetForm()">
                                             <i class="fas fa-plus"></i> Schedule Another Appointment
                                         </button>
@@ -651,11 +657,11 @@
                     <div class="help-content">
                         <p>If you encounter any issues or have questions about scheduling your appointment, please contact our support team.</p>
                         <div class="contact-options">
-                            <a href="tel:+63289296701" class="contact-link">
-                                <i class="fas fa-phone"></i> (02) 8929-6701
+                            <a href="tel:09171139347" class="contact-link">
+                                <i class="fas fa-phone"></i> 0917 113 9347
                             </a>
-                            <a href="mailto:support@nfa.gov.ph" class="contact-link">
-                                <i class="fas fa-envelope"></i> support@nfa.gov.ph
+                            <a href="mailto:publicaffairs@nfa.gov.ph" class="contact-link" target="_blank" rel="noopener noreferrer">
+                                <i class="fas fa-envelope"></i> publicaffairs@nfa.gov.ph
                             </a>
                             <a href="#" class="contact-link" data-legal-modal="contact">
                                 <i class="fas fa-comments"></i> Live Chat
@@ -702,7 +708,9 @@
     <!-- Printable Confirmation (rendered only during printing) -->
     <div id="printableConfirmation" class="printable-confirmation" aria-hidden="true"></div>
 
+    <script src="js/clear_inputs.js"></script>
+    <script src="js/loading_ui.js?v=<?php echo urlencode((string)@filemtime(__DIR__ . '/js/loading_ui.js')); ?>"></script>
     <script src="js/farmer_app.js"></script>
-    <script src="js/legal_modal.js"></script>
+    <script src="js/legal_modal.js?v=20260119"></script>
 </body>
 </html>

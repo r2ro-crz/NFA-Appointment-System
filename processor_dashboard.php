@@ -92,7 +92,7 @@ $new_count = count(array_filter($notifications, fn($n) => $n['status'] == 'pendi
 $today = date('Y-m-d');
 $today_stmt = $pdo->prepare("SELECT COUNT(*) as count,
     SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending,
-    SUM(CASE WHEN status = 'confirmed' THEN 1 ELSE 0 END) as confirmed
+    SUM(CASE WHEN status IN ('confirmed','rescheduled') THEN 1 ELSE 0 END) as confirmed
     FROM appointments
     WHERE branch_id = ? AND status != 'cancelled'");
 $today_stmt->execute([$branch_id]);
@@ -181,7 +181,7 @@ $top_farmers = $farmer_stmt->fetchAll(PDO::FETCH_ASSOC);
                     <i class="fas fa-chart-line"></i>
                     <span>Dashboard</span>
                 </a>
-                <a href="operator.php" class="nav-link">
+                <a href="appointments.php" class="nav-link">
                     <i class="fas fa-calendar-check"></i>
                     <span>Appointments</span>
                 </a>
@@ -225,7 +225,7 @@ $top_farmers = $farmer_stmt->fetchAll(PDO::FETCH_ASSOC);
                                 $time_label = $n['time_slot'] == 'AM' ? 'Morning' : 'Afternoon';
                             ?>
                                 <a class="notif-item <?php echo $unread ? 'unread' : ''; ?>" 
-                                   href="operator.php?view=<?php echo (int)$n['appointment_id']; ?>"
+                                   href="appointments.php?view=<?php echo (int)$n['appointment_id']; ?>"
                                    data-appointment-id="<?php echo (int)$n['appointment_id']; ?>"
                                    data-is-read="<?php echo $unread ? '0' : '1'; ?>">
                                     <div class="notif-icon-small">
@@ -269,7 +269,7 @@ $top_farmers = $farmer_stmt->fetchAll(PDO::FETCH_ASSOC);
                         <?php endif; ?>
                     </div>
                     <div class="notif-footer">
-                        <a href="operator.php" class="view-all">
+                        <a href="appointments.php" class="view-all">
                             <i class="fas fa-list"></i> View All Appointments
                         </a>
                     </div>
@@ -408,7 +408,7 @@ $top_farmers = $farmer_stmt->fetchAll(PDO::FETCH_ASSOC);
                     </div>
                 </div>
                 <div class="stat-trend">
-                    <a href="operator.php?date=<?php echo $today; ?>" class="view-details">
+                    <a href="appointments.php?date=<?php echo $today; ?>" class="view-details">
                         <i class="fas fa-external-link-alt"></i> View Today
                     </a>
                 </div>
@@ -553,14 +553,14 @@ $top_farmers = $farmer_stmt->fetchAll(PDO::FETCH_ASSOC);
                             <div class="empty-state">
                                 <i class="fas fa-calendar-times"></i>
                                 <p>No appointments scheduled for today</p>
-                                <a href="operator.php" class="btn-outline">
+                                <a href="appointments.php" class="btn-outline">
                                     <i class="fas fa-plus"></i> View All Appointments
                                 </a>
                             </div>
                         <?php endif; ?>
                         
                         <div class="card-footer">
-                            <a href="operator.php" class="view-all-link">
+                            <a href="appointments.php" class="view-all-link">
                                 <i class="fas fa-list"></i> View All Appointments
                             </a>
                         </div>
@@ -622,7 +622,7 @@ $top_farmers = $farmer_stmt->fetchAll(PDO::FETCH_ASSOC);
                     </div>
                     <div class="card-body">
                         <div class="quick-actions-grid">
-                            <a href="operator.php" class="quick-action pending">
+                            <a href="appointments.php" class="quick-action pending">
                                 <i class="fas fa-clock"></i>
                                 <span>Pending Approvals</span>
                                 <?php if ($new_count > 0): ?>
@@ -637,7 +637,7 @@ $top_farmers = $farmer_stmt->fetchAll(PDO::FETCH_ASSOC);
                                 <i class="fas fa-file-alt"></i>
                                 <span>Daily Report</span>
                             </a>
-                            <a href="operator.php" class="quick-action add">
+                            <a href="appointments.php" class="quick-action add">
                                 <i class="fas fa-plus-circle"></i>
                                 <span>Add Appointment</span>
                             </a>
@@ -699,6 +699,8 @@ $top_farmers = $farmer_stmt->fetchAll(PDO::FETCH_ASSOC);
     </script>
 
     <!-- JavaScript -->
+    <script src="js/loading_ui.js?v=<?php echo urlencode((string)@filemtime(__DIR__ . '/js/loading_ui.js')); ?>"></script>
+    <script src="js/refresh_bus.js?v=<?php echo urlencode((string)@filemtime(__DIR__ . '/js/refresh_bus.js')); ?>"></script>
     <script src="js/processor.js?v=<?php echo urlencode((string)@filemtime(__DIR__ . '/js/processor.js')); ?>"></script>
 </body>
 </html>

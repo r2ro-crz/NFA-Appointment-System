@@ -16,6 +16,46 @@ document.addEventListener('DOMContentLoaded', () => {
     const LOCK_THRESHOLD = 5;
     const LOCK_DURATION_MS = 30 * 1000;
     let lockInterval = null;
+
+    const setOverlayMessage = (message) => {
+        try {
+            const p = loadingOverlay && loadingOverlay.querySelector('.loading-content p');
+            if (p) p.textContent = message || p.textContent || 'Processing…';
+        } catch (e) {
+            // ignore
+        }
+    };
+
+    const showGlobalLoading = (message) => {
+        try {
+            if (window.NFALoading && typeof window.NFALoading.show === 'function') {
+                window.NFALoading.show(message || 'Processing…');
+                return;
+            }
+        } catch (e) {
+            // ignore
+        }
+
+        if (loadingOverlay) {
+            setOverlayMessage(message || 'Processing…');
+            loadingOverlay.classList.add('active');
+        }
+    };
+
+    const hideGlobalLoading = () => {
+        try {
+            if (window.NFALoading && typeof window.NFALoading.hide === 'function') {
+                window.NFALoading.hide();
+                return;
+            }
+        } catch (e) {
+            // ignore
+        }
+
+        if (loadingOverlay) {
+            loadingOverlay.classList.remove('active');
+        }
+    };
     
     // --- Utility Functions ---
     function safeLocalStorageGet(key) {
@@ -192,7 +232,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             
             // Show loading overlay
-            loadingOverlay.classList.add('active');
+            showGlobalLoading('Authenticating…');
             
             // Update button state
             submitBtn.disabled = true;
@@ -397,6 +437,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             otpSubmitBtn && (otpSubmitBtn.disabled = true);
             otpSubmitBtn && (otpSubmitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Verifying...');
+            showGlobalLoading('Verifying code…');
 
             try {
                 const res = await postOtpAction('verifyOtp', { otp });
@@ -409,6 +450,7 @@ document.addEventListener('DOMContentLoaded', () => {
             } catch (err) {
                 showOtpError('Network error. Please try again.');
             } finally {
+                hideGlobalLoading();
                 otpSubmitBtn && (otpSubmitBtn.disabled = false);
                 otpSubmitBtn && (otpSubmitBtn.innerHTML = '<i class="fas fa-check"></i> Verify');
             }
@@ -421,6 +463,7 @@ document.addEventListener('DOMContentLoaded', () => {
             otpResendBtn.disabled = true;
             const oldText = otpResendBtn.textContent;
             otpResendBtn.textContent = 'Sending...';
+            showGlobalLoading('Sending a new code…');
 
             try {
                 const res = await postOtpAction('resendOtp');
@@ -440,6 +483,7 @@ document.addEventListener('DOMContentLoaded', () => {
             } catch (err) {
                 showOtpError('Network error. Please try again.');
             } finally {
+                hideGlobalLoading();
                 otpResendBtn.disabled = false;
                 otpResendBtn.textContent = oldText;
             }
@@ -686,6 +730,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             fpEmailSubmit && (fpEmailSubmit.disabled = true);
             fpEmailSubmit && (fpEmailSubmit.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Sending...');
+            showGlobalLoading('Sending reset code…');
 
             try {
                 const res = await fpPost('startPasswordReset', { email });
@@ -700,6 +745,7 @@ document.addEventListener('DOMContentLoaded', () => {
             } catch (err) {
                 fpShowAlert('Network error. Please try again.');
             } finally {
+                hideGlobalLoading();
                 fpEmailSubmit && (fpEmailSubmit.disabled = false);
                 fpEmailSubmit && (fpEmailSubmit.innerHTML = '<i class="fas fa-paper-plane"></i> Send Code');
             }
@@ -748,6 +794,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             fpOtpSubmit && (fpOtpSubmit.disabled = true);
             fpOtpSubmit && (fpOtpSubmit.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Verifying...');
+            showGlobalLoading('Verifying reset code…');
 
             try {
                 const res = await fpPost('verifyPasswordResetOtp', { otp });
@@ -763,6 +810,7 @@ document.addEventListener('DOMContentLoaded', () => {
             } catch (err) {
                 fpShowAlert('Network error. Please try again.');
             } finally {
+                hideGlobalLoading();
                 fpOtpSubmit && (fpOtpSubmit.disabled = false);
                 fpOtpSubmit && (fpOtpSubmit.innerHTML = '<i class="fas fa-check"></i> Verify Code');
             }
@@ -775,6 +823,7 @@ document.addEventListener('DOMContentLoaded', () => {
             fpResendBtn.disabled = true;
             const oldText = fpResendBtn.textContent;
             fpResendBtn.textContent = 'Sending...';
+            showGlobalLoading('Sending a new reset code…');
 
             try {
                 const res = await fpPost('resendPasswordResetOtp');
@@ -788,6 +837,7 @@ document.addEventListener('DOMContentLoaded', () => {
             } catch (err) {
                 fpShowAlert('Network error. Please try again.');
             } finally {
+                hideGlobalLoading();
                 fpResendBtn.disabled = false;
                 fpResendBtn.textContent = oldText;
             }
@@ -844,6 +894,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             fpPasswordSubmit && (fpPasswordSubmit.disabled = true);
             fpPasswordSubmit && (fpPasswordSubmit.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Updating...');
+            showGlobalLoading('Updating password…');
 
             try {
                 const res = await fpPost('setNewPassword', { password: pw, confirm });
@@ -859,6 +910,7 @@ document.addEventListener('DOMContentLoaded', () => {
             } catch (err) {
                 fpShowAlert('Network error. Please try again.');
             } finally {
+                hideGlobalLoading();
                 fpPasswordSubmit && (fpPasswordSubmit.disabled = false);
                 fpPasswordSubmit && (fpPasswordSubmit.innerHTML = '<i class="fas fa-save"></i> Update Password');
             }

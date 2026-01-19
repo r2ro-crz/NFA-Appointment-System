@@ -4,6 +4,11 @@ document.addEventListener('DOMContentLoaded', function() {
     initNavigation();
     initNotifications();
 
+    const isDashboardPage = !!document.getElementById('chart-data-store');
+    if (isDashboardPage) {
+        initDashboardAutoRefresh({ intervalMs: 60 * 1000, idleGraceMs: 8000 });
+    }
+
     // Charts only exist on the dashboard page
     const chartDataEl = document.getElementById('chart-data-store');
     if (!chartDataEl || !window.Chart || !window.ChartDataLabels) {
@@ -25,10 +30,54 @@ document.addEventListener('DOMContentLoaded', function() {
 
     initCharts(warehouseCapacity, inventory, available, capacityPercentage, weekDays, weekCounts, weekVolumes);
     initDashboardInteractions();
-
-    // Auto-refresh data every 5 minutes
-    setInterval(refreshDashboardData, 5 * 60 * 1000);
 });
+
+function initDashboardAutoRefresh({ intervalMs, idleGraceMs }) {
+    let lastUserActivity = Date.now();
+    let timerId = null;
+
+    const markActivity = () => {
+        lastUserActivity = Date.now();
+    };
+
+    ['click', 'keydown', 'mousemove', 'scroll', 'touchstart'].forEach(evt => {
+        window.addEventListener(evt, markActivity, { passive: true });
+    });
+
+    const shouldDeferRefresh = () => {
+        if (document.visibilityState !== 'visible') return true;
+        if (Date.now() - lastUserActivity < idleGraceMs) return true;
+
+        const notifDropdown = document.getElementById('notifDropdown');
+        if (notifDropdown && notifDropdown.classList.contains('show')) return true;
+
+        const userDropdown = document.getElementById('userDropdown');
+        if (userDropdown && userDropdown.classList.contains('show')) return true;
+
+        const loadingOverlay = document.getElementById('loadingOverlay');
+        if (loadingOverlay && loadingOverlay.classList.contains('active')) return true;
+
+        return false;
+    };
+
+    const tick = () => {
+        timerId = null;
+
+        if (shouldDeferRefresh()) {
+            schedule(Math.min(15 * 1000, intervalMs));
+            return;
+        }
+
+        window.location.reload();
+    };
+
+    const schedule = (delay) => {
+        if (timerId) clearTimeout(timerId);
+        timerId = setTimeout(tick, delay);
+    };
+
+    schedule(intervalMs);
+}
 
 // Navigation and UI Interactions
 function initNavigation() {
@@ -613,11 +662,133 @@ function initDashboardInteractions() {
 // Utility Functions
 function viewAppointment(appointmentId) {
     // Redirect to appointment details page
-    window.location.href = `operator.php?view=${appointmentId}`;
+    window.location.href = `appointments.php?view=${appointmentId}`;
+}
+
+function confirmDialog({
+    title = 'Confirm',
+    message = 'Are you sure?',
+    confirmText = 'Confirm',
+    cancelText = 'Cancel',
+    tone = 'primary' // primary | danger
+} = {}) {
+    return new Promise((resolve) => {
+        let overlay = document.getElementById('confirmModalOverlay');
+        if (!overlay) {
+            overlay = document.createElement('div');
+            overlay.id = 'confirmModalOverlay';
+            overlay.className = 'modal-overlay confirm-overlay';
+            overlay.style.display = 'none';
+            overlay.innerHTML = `
+                <div class="modal-dialog confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="confirmTitle" aria-describedby="confirmMessage">
+                    <button class="modal-close" type="button" id="confirmClose" aria-label="Close"><i class="fas fa-times"></i></button>
+                    <div class="confirm-header">
+                        <div class="confirm-icon" aria-hidden="true"></div>
+                        <div class="confirm-headings">
+                            <h2 id="confirmTitle"></h2>
+                            <p id="confirmMessage" class="confirm-message"></p>
+                        </div>
+                    </div>
+                    <div class="confirm-actions">
+                        <button type="button" class="btn-view-details btn-inline-secondary" id="confirmCancel"></button>
+                        <button type="button" class="btn-view-details btn-inline-primary" id="confirmOk"></button>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(overlay);
+        }
+
+        const titleEl = overlay.querySelector('#confirmTitle');
+        const messageEl = overlay.querySelector('#confirmMessage');
+        const btnCancel = overlay.querySelector('#confirmCancel');
+        const btnOk = overlay.querySelector('#confirmOk');
+        const btnClose = overlay.querySelector('#confirmClose');
+        const iconEl = overlay.querySelector('.confirm-icon');
+
+        if (titleEl) titleEl.textContent = title;
+        if (messageEl) messageEl.textContent = message;
+
+        if (btnCancel) btnCancel.textContent = cancelText;
+        if (btnOk) btnOk.textContent = confirmText;
+
+        // Tone
+        if (btnOk) {
+            btnOk.classList.toggle('btn-inline-danger', tone === 'danger');
+            btnOk.classList.toggle('btn-inline-primary', tone !== 'danger');
+        }
+        if (iconEl) {
+            iconEl.classList.toggle('danger', tone === 'danger');
+        }
+
+        const previouslyFocused = document.activeElement;
+        const hadModalOpen = document.body.classList.contains('modal-open');
+
+        const cleanup = () => {
+            overlay.style.display = 'none';
+            if (!hadModalOpen) {
+                document.body.classList.remove('modal-open');
+            }
+
+            overlay.removeEventListener('click', onOverlayClick);
+            document.removeEventListener('keydown', onKeyDown);
+            btnCancel && btnCancel.removeEventListener('click', onCancel);
+            btnOk && btnOk.removeEventListener('click', onOk);
+            btnClose && btnClose.removeEventListener('click', onCancel);
+
+            if (previouslyFocused && typeof previouslyFocused.focus === 'function') {
+                previouslyFocused.focus();
+            }
+        };
+
+        const onCancel = () => {
+            cleanup();
+            resolve(false);
+        };
+
+        const onOk = () => {
+            cleanup();
+            resolve(true);
+        };
+
+        const onOverlayClick = (e) => {
+            if (e.target === overlay) {
+                onCancel();
+            }
+        };
+
+        const onKeyDown = (e) => {
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                onCancel();
+            }
+        };
+
+        overlay.addEventListener('click', onOverlayClick);
+        document.addEventListener('keydown', onKeyDown);
+        btnCancel && btnCancel.addEventListener('click', onCancel);
+        btnOk && btnOk.addEventListener('click', onOk);
+        btnClose && btnClose.addEventListener('click', onCancel);
+
+        overlay.style.display = 'flex';
+        document.body.classList.add('modal-open');
+
+        // Focus the primary action
+        setTimeout(() => {
+            if (btnOk && typeof btnOk.focus === 'function') btnOk.focus();
+        }, 0);
+    });
 }
 
 function confirmAppointment(appointmentId) {
-    if (confirm('Are you sure you want to confirm this appointment?')) {
+    Promise.resolve(confirmDialog({
+        title: 'Confirm Appointment',
+        message: 'Are you sure you want to confirm this appointment? This will mark it as confirmed.',
+        confirmText: 'Yes, Confirm',
+        cancelText: 'Cancel',
+        tone: 'primary'
+    }))
+    .then((ok) => {
+        if (!ok) return;
         showLoading(true);
         
         fetch('php_helper/api.php?action=confirmAppointment', {
@@ -632,6 +803,13 @@ function confirmAppointment(appointmentId) {
         .then(data => {
             if (data.success) {
                 showToast('Appointment confirmed successfully!', 'success');
+                try {
+                    if (typeof window.publishAppointmentsRefresh === 'function') {
+                        window.publishAppointmentsRefresh({ reason: 'confirmed' });
+                    }
+                } catch (e) {
+                    // ignore
+                }
                 // Refresh the schedule list
                 setTimeout(() => location.reload(), 1000);
             } else {
@@ -645,7 +823,7 @@ function confirmAppointment(appointmentId) {
         .finally(() => {
             showLoading(false);
         });
-    }
+    });
 }
 
 function refreshDashboardData() {

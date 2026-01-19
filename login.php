@@ -318,7 +318,8 @@ if (isset($_GET['locked']) && $_GET['locked'] == 1) {
         </div>
     </div>
     
+    <script src="js/loading_ui.js?v=<?php echo urlencode((string)@filemtime(__DIR__ . '/js/loading_ui.js')); ?>"></script>
     <script src="js/login_app.js"></script>
-    <script src="js/legal_modal.js"></script>
+    <script src="js/legal_modal.js?v=20260119"></script>
 </body>
 </html>
