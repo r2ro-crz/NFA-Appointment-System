@@ -112,7 +112,7 @@ $fmtNum = fn($n) => number_format((float)$n, 0);
 
         <div class="print-body">
             <div class="no-print" style="display:flex; gap:10px; justify-content:flex-end; margin-bottom:10px;">
-                <a href="appointment_tracker.php?ref=<?php echo urlencode($reference_number); ?>" style="text-decoration:none; border:1px solid #cfd6df; padding:8px 10px; border-radius:8px; color:#111;">Back</a>
+                <button type="button" id="backBtn" style="border:1px solid #cfd6df; background:#fff; color:#111; padding:8px 10px; border-radius:8px; cursor:pointer;">Back</button>
                 <button onclick="window.print()" style="border:1px solid #0b6a2b; background:#0b6a2b; color:#fff; padding:8px 10px; border-radius:8px; cursor:pointer;">Print</button>
             </div>
 
@@ -158,5 +158,40 @@ $fmtNum = fn($n) => number_format((float)$n, 0);
 
         <?php nfa_print_footer($branchCtx); ?>
     </div>
+
+    <script>
+        (function () {
+            const backBtn = document.getElementById('backBtn');
+            if (!backBtn) return;
+
+            const fallbackUrl = <?php echo json_encode('appointment_tracker.php?ref=' . urlencode($reference_number)); ?>;
+
+            backBtn.addEventListener('click', () => {
+                try {
+                    if (window.opener && !window.opener.closed) {
+                        window.opener.focus();
+                    }
+                } catch (e) {
+                    // ignore
+                }
+
+                // Close the print preview tab/window (works when opened via window.open)
+                try { window.close(); } catch (e) { /* ignore */ }
+
+                // Fallback when browser blocks window.close (e.g., user opened directly)
+                setTimeout(() => {
+                    try {
+                        if (history.length > 1) {
+                            history.back();
+                        } else {
+                            window.location.href = fallbackUrl;
+                        }
+                    } catch (e) {
+                        window.location.href = fallbackUrl;
+                    }
+                }, 120);
+            });
+        })();
+    </script>
 </body>
 </html>

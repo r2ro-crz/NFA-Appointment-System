@@ -271,8 +271,16 @@ window.printConfirmationDocument = function () {
     if (farmerId) url.searchParams.set('farmer_id', String(farmerId));
     if (email) url.searchParams.set('email', String(email));
 
-    const w = window.open(url.toString(), '_blank', 'noopener,noreferrer');
-    if (!w) alert('Print was blocked. Please allow pop-ups or try again.');
+    // IMPORTANT:
+    // - We intentionally do NOT use noopener/noreferrer here.
+    //   Some browsers return `null` even when the tab opens (false "pop-up blocked" warning).
+    // - We also want window.opener available so the print tab can focus/return to this page.
+    const w = window.open(url.toString(), '_blank');
+    if (!w) {
+        alert('Print was blocked. Please allow pop-ups or try again.');
+        return;
+    }
+    try { w.focus(); } catch (e) {}
 };
 
 window.downloadConfirmationDocument = function () {

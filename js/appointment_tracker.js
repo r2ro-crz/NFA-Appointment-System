@@ -27,6 +27,28 @@ document.addEventListener('DOMContentLoaded', () => {
     const btnCopyRef = document.getElementById('copyRefBtn');
     const btnPrint = document.getElementById('printBtn');
 
+    const btnConfirmRescheduled = document.getElementById('confirmRescheduledBtn');
+    const btnCancelAppointment = document.getElementById('cancelAppointmentBtn');
+
+    const cancelModal = document.getElementById('cancelModal');
+    const cancelModalClose = document.getElementById('cancelModalClose');
+    const cancelModalBack = document.getElementById('cancelModalBack');
+    const cancelForm = document.getElementById('cancelForm');
+    const cancelDetails = document.getElementById('cancelDetails');
+    const cancelFormAlert = document.getElementById('cancelFormAlert');
+    const cancelSubmitBtn = document.getElementById('cancelSubmitBtn');
+
+    const confirmModal = document.getElementById('confirmModal');
+    const confirmModalClose = document.getElementById('confirmModalClose');
+    const confirmMessage = document.getElementById('confirmMessage');
+    const confirmMeta = document.getElementById('confirmMeta');
+    const confirmModalAlert = document.getElementById('confirmModalAlert');
+    const confirmCancelBtn = document.getElementById('confirmCancelBtn');
+    const confirmOkBtn = document.getElementById('confirmOkBtn');
+
+    let lastLoaded = null;
+    let confirmAction = null;
+
     const showAlert = (message, type = 'error') => {
         if (!alertBox) return;
         if (!message) {
@@ -50,6 +72,80 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         if (btnClear) btnClear.disabled = isLoading;
         if (btnPaste) btnPaste.disabled = isLoading;
+    };
+
+    const showInlineAlert = (el, message, type = 'error') => {
+        if (!el) return;
+        if (!message) {
+            el.style.display = 'none';
+            el.textContent = '';
+            el.classList.remove('success');
+            return;
+        }
+        el.textContent = message;
+        el.style.display = 'block';
+        if (type === 'success') el.classList.add('success');
+        else el.classList.remove('success');
+    };
+
+    const openModal = (overlayEl) => {
+        if (!overlayEl) return;
+        overlayEl.style.display = 'flex';
+        overlayEl.setAttribute('aria-hidden', 'false');
+        document.body.style.overflow = 'hidden';
+    };
+
+    const closeModal = (overlayEl) => {
+        if (!overlayEl) return;
+        overlayEl.style.display = 'none';
+        overlayEl.setAttribute('aria-hidden', 'true');
+        document.body.style.overflow = '';
+    };
+
+    const needsIdentity = () => {
+        const farmerId = String(farmerIdInput?.value || '').trim();
+        const email = String(emailInput?.value || '').trim();
+        return !(farmerId || email);
+    };
+
+    const postJson = async (action, payload) => {
+        const url = new URL(apiBase, window.location.href);
+        url.searchParams.set('action', action);
+        const resp = await fetch(url.toString(), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload || {})
+        });
+        const json = await resp.json().catch(() => null);
+        if (!resp.ok || !json || !json.success) {
+            const msg = (json && json.error) ? json.error : 'Request failed.';
+            throw new Error(msg);
+        }
+        return json;
+    };
+
+    const verifyIdentityNow = async () => {
+        const payload = getIdentityPayload();
+        await postJson('verifyTrackerIdentity', payload);
+    };
+
+    const setActionButtons = (status) => {
+        const s = String(status || '').toLowerCase();
+        const cancelled = s === 'cancelled' || s === 'canceled';
+        const completed = s === 'completed';
+
+        if (btnCancelAppointment) {
+            btnCancelAppointment.style.display = (lastLoaded ? 'inline-flex' : 'none');
+            btnCancelAppointment.disabled = cancelled || completed;
+            btnCancelAppointment.title = completed
+                ? 'Completed appointments cannot be cancelled.'
+                : (cancelled ? 'This appointment is already cancelled.' : '');
+        }
+
+        if (btnConfirmRescheduled) {
+            btnConfirmRescheduled.style.display = (s === 'rescheduled') ? 'inline-flex' : 'none';
+            btnConfirmRescheduled.disabled = false;
+        }
     };
 
     const normalizeRef = (value) => {
@@ -145,6 +241,7 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     const renderResult = (data) => {
+        lastLoaded = data || null;
         const s = String(data.status || '').toLowerCase();
         if (statusPill) {
             statusPill.textContent = statusLabel(s);
@@ -174,7 +271,30 @@ document.addEventListener('DOMContentLoaded', () => {
 
         markTimeline(s);
 
+        setActionButtons(s);
+
         if (results) results.style.display = 'block';
+    };
+
+    const openConfirm = ({ message, metaHtml, okLabel, danger }) => {
+        confirmAction = null;
+        showInlineAlert(confirmModalAlert, '');
+
+        if (confirmMessage) confirmMessage.textContent = message || 'Are you sure?';
+        if (confirmMeta) {
+            if (metaHtml) {
+                confirmMeta.innerHTML = metaHtml;
+                confirmMeta.style.display = 'block';
+            } else {
+                confirmMeta.innerHTML = '';
+                confirmMeta.style.display = 'none';
+            }
+        }
+        if (confirmOkBtn) {
+            confirmOkBtn.textContent = okLabel || 'Yes';
+            confirmOkBtn.className = `tracker-btn ${danger ? 'tracker-btn-danger' : 'tracker-btn-primary'}`;
+        }
+        openModal(confirmModal);
     };
 
     const doLookup = async () => {
@@ -228,6 +348,8 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch (e) {
             showAlert(e?.message || 'Something went wrong while fetching the appointment.');
             if (results) results.style.display = 'none';
+            lastLoaded = null;
+            setActionButtons('');
         } finally {
             try {
                 window.NFALoading && typeof window.NFALoading.hide === 'function' && window.NFALoading.hide();
@@ -236,6 +358,120 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             setLoading(false);
         }
+    };
+
+    const getIdentityPayload = () => {
+        return {
+            reference_number: normalizeRef(refValue?.textContent || refInput?.value),
+            farmer_id: String(farmerIdInput?.value || '').trim(),
+            email: String(emailInput?.value || '').trim(),
+        };
+    };
+
+    const handleCancelClick = () => {
+        if (!lastLoaded) return;
+
+        (async () => {
+            if (needsIdentity()) {
+                showAlert('For security, please enter your Farmer ID or Email before cancelling.', 'error');
+                farmerIdInput && farmerIdInput.focus();
+                return;
+            }
+
+            if (btnCancelAppointment) btnCancelAppointment.disabled = true;
+            if (btnConfirmRescheduled) btnConfirmRescheduled.disabled = true;
+            try {
+                window.NFALoading && typeof window.NFALoading.show === 'function' && window.NFALoading.show('Verifying…');
+            } catch {
+                // ignore
+            }
+
+            try {
+                await verifyIdentityNow();
+
+                showInlineAlert(cancelFormAlert, '');
+                if (cancelForm) cancelForm.reset();
+                if (cancelDetails) cancelDetails.value = '';
+                try { syncOtherRequirement(); } catch { /* ignore */ }
+                openModal(cancelModal);
+            } catch (e) {
+                showAlert(e?.message || 'Verification failed. Please check your Farmer ID/Email.', 'error');
+            } finally {
+                try {
+                    window.NFALoading && typeof window.NFALoading.hide === 'function' && window.NFALoading.hide();
+                } catch {
+                    // ignore
+                }
+                if (btnCancelAppointment) btnCancelAppointment.disabled = false;
+                if (btnConfirmRescheduled) btnConfirmRescheduled.disabled = false;
+            }
+        })();
+    };
+
+    const handleConfirmRescheduledClick = () => {
+        if (!lastLoaded) return;
+
+        (async () => {
+            if (needsIdentity()) {
+                showAlert('For security, please enter your Farmer ID or Email before confirming.', 'error');
+                farmerIdInput && farmerIdInput.focus();
+                return;
+            }
+
+            if (btnCancelAppointment) btnCancelAppointment.disabled = true;
+            if (btnConfirmRescheduled) btnConfirmRescheduled.disabled = true;
+            try {
+                window.NFALoading && typeof window.NFALoading.show === 'function' && window.NFALoading.show('Verifying…');
+            } catch {
+                // ignore
+            }
+
+            try {
+                await verifyIdentityNow();
+
+                const ref = String(lastLoaded.reference_number || '').trim();
+                const meta = `
+                    <div><strong>Reference:</strong> ${ref || '—'}</div>
+                    <div><strong>New schedule:</strong> ${formatDate(lastLoaded.date)} • ${slotLabel(lastLoaded.time_slot)}</div>
+                `;
+
+                openConfirm({
+                    message: 'Confirm your updated schedule? This will set your appointment status to Confirmed.',
+                    metaHtml: meta,
+                    okLabel: 'Yes, confirm',
+                    danger: false,
+                });
+
+                confirmAction = async () => {
+                    const payload = getIdentityPayload();
+                    await postJson('confirmRescheduledByTracker', payload);
+                    await doLookup();
+                    showAlert('Appointment confirmed successfully.', 'success');
+                };
+            } catch (e) {
+                showAlert(e?.message || 'Verification failed. Please check your Farmer ID/Email.', 'error');
+            } finally {
+                try {
+                    window.NFALoading && typeof window.NFALoading.hide === 'function' && window.NFALoading.hide();
+                } catch {
+                    // ignore
+                }
+                if (btnCancelAppointment) btnCancelAppointment.disabled = false;
+                if (btnConfirmRescheduled) btnConfirmRescheduled.disabled = false;
+            }
+        })();
+    };
+
+    const validateCancelForm = () => {
+        const reason = cancelForm ? (cancelForm.querySelector('input[name="cancel_reason"]:checked')?.value || '') : '';
+        const details = String(cancelDetails?.value || '').trim();
+        if (!reason) {
+            return { ok: false, message: 'Please select a cancellation reason.' };
+        }
+        if (reason === 'other' && details === '') {
+            return { ok: false, message: 'Please provide details for the “Other” reason.' };
+        }
+        return { ok: true, reason, details };
     };
 
     // Prefill only from URL
@@ -296,6 +532,9 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     btnPrint && btnPrint.addEventListener('click', () => {
+        // Clear any previous alert (especially "Pop-up blocked" from earlier attempts)
+        showAlert('');
+
         const reference = normalizeRef(refValue?.textContent || refInput?.value);
         const farmerId = String(farmerIdInput?.value || '').trim();
         const email = String(emailInput?.value || '').trim();
@@ -311,7 +550,146 @@ document.addEventListener('DOMContentLoaded', () => {
         if (farmerId) url.searchParams.set('farmer_id', farmerId);
         if (email) url.searchParams.set('email', email);
 
-        const w = window.open(url.toString(), '_blank', 'noopener,noreferrer');
-        if (!w) showAlert('Pop-up blocked. Please allow pop-ups to open the print view.');
+        // Use a normal navigation-style new tab open (more reliable than window.open return value).
+        const a = document.createElement('a');
+        a.href = url.toString();
+        a.target = '_blank';
+        a.rel = 'noopener noreferrer';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+    });
+
+    // --- Cancel / Confirm actions ---
+    btnCancelAppointment && btnCancelAppointment.addEventListener('click', handleCancelClick);
+    btnConfirmRescheduled && btnConfirmRescheduled.addEventListener('click', handleConfirmRescheduledClick);
+
+    const closeCancel = () => closeModal(cancelModal);
+    cancelModalClose && cancelModalClose.addEventListener('click', closeCancel);
+    cancelModalBack && cancelModalBack.addEventListener('click', closeCancel);
+    cancelModal && cancelModal.addEventListener('click', (e) => {
+        if (e.target === cancelModal) closeCancel();
+    });
+
+    const closeConfirm = () => {
+        closeModal(confirmModal);
+        confirmAction = null;
+        showInlineAlert(confirmModalAlert, '');
+    };
+    confirmModalClose && confirmModalClose.addEventListener('click', closeConfirm);
+    confirmCancelBtn && confirmCancelBtn.addEventListener('click', closeConfirm);
+    confirmModal && confirmModal.addEventListener('click', (e) => {
+        if (e.target === confirmModal) closeConfirm();
+    });
+
+    confirmOkBtn && confirmOkBtn.addEventListener('click', async () => {
+        if (typeof confirmAction !== 'function') {
+            closeConfirm();
+            return;
+        }
+
+        showInlineAlert(confirmModalAlert, '');
+        confirmOkBtn.disabled = true;
+        confirmCancelBtn && (confirmCancelBtn.disabled = true);
+
+        try {
+            window.NFALoading && typeof window.NFALoading.show === 'function' && window.NFALoading.show('Processing…');
+        } catch {
+            // ignore
+        }
+
+        try {
+            await confirmAction();
+            closeConfirm();
+        } catch (e) {
+            showInlineAlert(confirmModalAlert, e?.message || 'Unable to process your request.');
+        } finally {
+            try {
+                window.NFALoading && typeof window.NFALoading.hide === 'function' && window.NFALoading.hide();
+            } catch {
+                // ignore
+            }
+            confirmOkBtn.disabled = false;
+            confirmCancelBtn && (confirmCancelBtn.disabled = false);
+        }
+    });
+
+    cancelForm && cancelForm.addEventListener('submit', (e) => {
+        e.preventDefault();
+        showInlineAlert(cancelFormAlert, '');
+
+        const v = validateCancelForm();
+        if (!v.ok) {
+            showInlineAlert(cancelFormAlert, v.message);
+            return;
+        }
+
+        const ref = String(lastLoaded?.reference_number || '').trim();
+        const reasonLabelMap = {
+            schedule_conflict: 'Schedule conflict',
+            no_longer_available: 'No longer available to deliver',
+            wrong_details: 'Wrong details / need to rebook',
+            other: 'Other'
+        };
+
+        const meta = `
+            <div><strong>Reference:</strong> ${ref || '—'}</div>
+            <div><strong>Reason:</strong> ${reasonLabelMap[v.reason] || v.reason}</div>
+            ${v.details ? `<div><strong>Details:</strong> ${v.details.replace(/</g, '&lt;')}</div>` : ''}
+        `;
+
+        closeModal(cancelModal);
+        openConfirm({
+            message: 'Are you sure you want to cancel this appointment? This action cannot be undone.',
+            metaHtml: meta,
+            okLabel: 'Yes, cancel',
+            danger: true,
+        });
+
+        confirmAction = async () => {
+            const payload = {
+                ...getIdentityPayload(),
+                reason_code: v.reason,
+                reason_detail: v.details || ''
+            };
+            await postJson('cancelAppointmentByTracker', payload);
+            await doLookup();
+            showAlert('Appointment cancelled successfully.', 'success');
+        };
+    });
+
+    // Toggle textarea required when "Other" is selected
+    const syncOtherRequirement = () => {
+        const reason = cancelForm ? (cancelForm.querySelector('input[name="cancel_reason"]:checked')?.value || '') : '';
+        const isOther = reason === 'other';
+        if (cancelDetails) {
+            cancelDetails.required = isOther;
+        }
+        const help = document.getElementById('cancelDetailsHelp');
+        if (help) {
+            help.textContent = isOther
+                ? 'Details are required when you choose “Other”.'
+                : 'If you choose “Other”, details are required.';
+        }
+        const label = document.querySelector('label[for="cancelDetails"]');
+        if (label) {
+            label.textContent = isOther ? 'Details (required)' : 'Details (optional)';
+        }
+    };
+
+    cancelForm && cancelForm.addEventListener('change', (e) => {
+        if (e && e.target && e.target.name === 'cancel_reason') {
+            syncOtherRequirement();
+        }
+    });
+
+    // ESC closes modals
+    document.addEventListener('keydown', (e) => {
+        if (e.key !== 'Escape') return;
+        if (confirmModal && confirmModal.style.display !== 'none') {
+            closeConfirm();
+        } else if (cancelModal && cancelModal.style.display !== 'none') {
+            closeCancel();
+        }
     });
 });

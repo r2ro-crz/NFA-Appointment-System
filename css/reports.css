@@ -43,6 +43,56 @@
     margin-top: 0.9rem;
 }
 
+.report-mode-btn.is-active {
+    box-shadow: 0 14px 28px rgba(52, 152, 219, 0.18);
+    transform: translateY(-1px);
+}
+
+.warehouse-report .table-panel {
+    margin-top: 0;
+}
+
+.warehouse-panels {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 1rem;
+}
+
+.warehouse-metrics {
+    display: inline-flex;
+    gap: 0.9rem;
+    flex-wrap: wrap;
+    font-weight: 900;
+    color: var(--dark-gray);
+}
+
+.warehouse-metrics .muted,
+.warehouse-footnote.muted {
+    color: var(--medium-gray);
+    font-weight: 800;
+}
+
+.warehouse-only-note {
+    margin-top: 0.65rem;
+    padding: 0.6rem 0.75rem;
+    border-radius: 14px;
+    border: 1px solid rgba(15, 23, 42, 0.10);
+    background: rgba(255, 255, 255, 0.7);
+}
+
+.granularity-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.45rem 0.75rem;
+    border-radius: 999px;
+    border: 1px solid rgba(15, 23, 42, 0.12);
+    background: rgba(248, 250, 252, 0.8);
+    color: var(--dark-gray);
+    font-weight: 900;
+    font-size: 0.9rem;
+}
+
 .reports-hero-right {
     text-align: right;
     min-width: 260px;
@@ -197,6 +247,47 @@
     accent-color: var(--rep-blue);
 }
 
+/* Warehouse activity (Reports) */
+.warehouse-meta{
+    display:flex;
+    justify-content:space-between;
+    gap:0.75rem;
+    align-items:flex-start;
+    margin-bottom:0.65rem;
+    flex-wrap:wrap;
+}
+
+.warehouse-legend{
+    display:flex;
+    gap:0.8rem;
+    flex-wrap:wrap;
+    color:var(--medium-gray);
+    font-weight:800;
+    font-size:0.9rem;
+}
+
+.warehouse-legend .lg{
+    display:inline-block;
+    width:14px;
+    height:10px;
+    border-radius:999px;
+    margin-right:6px;
+    vertical-align:middle;
+}
+
+.warehouse-legend .lg.inv{ background: #3b82f6; }
+.warehouse-legend .lg.avail{ background: #10b981; }
+
+.warehouse-chart{
+    width:100%;
+    position: relative;
+    height: 260px;
+}
+
+.warehouse-chart svg{
+    display:block;
+}
+
 .filter-actions {
     display: grid;
     grid-template-columns: 1fr;
@@ -229,8 +320,13 @@
 
 .kpi-row {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(3, 1fr);
     gap: 1rem;
+}
+
+/* Add breathing room between KPI cards and the appointments table */
+.kpi-row + .table-panel{
+    margin-top: 1rem;
 }
 
 @media (max-width: 1100px) {
@@ -272,9 +368,11 @@
 }
 
 .kpi-ico.total { background: linear-gradient(135deg, var(--rep-blue), #2e86c1); }
-.kpi-ico.volume { background: linear-gradient(135deg, var(--rep-green), #229954); }
-.kpi-ico.done { background: linear-gradient(135deg, var(--rep-purple), #6c3483); }
+.kpi-ico.completed { background: linear-gradient(135deg, var(--rep-green), #229954); }
+.kpi-ico.confirmed { background: linear-gradient(135deg, #1f7dd6, #2e86c1); }
+.kpi-ico.rescheduled { background: linear-gradient(135deg, var(--rep-purple), #6c3483); }
 .kpi-ico.pending { background: linear-gradient(135deg, var(--rep-orange), #d68910); }
+.kpi-ico.cancelled { background: linear-gradient(135deg, var(--rep-red), #c0392b); }
 
 .kpi-label {
     color: var(--medium-gray);
@@ -290,11 +388,12 @@
     letter-spacing: -0.02em;
 }
 
-.kpi-unit {
-    margin-left: 0.35rem;
+.kpi-sub {
+    margin-top: 0.15rem;
     font-size: 0.95rem;
-    color: var(--medium-gray);
+    color: #9aa0a6;
     font-weight: 900;
+    letter-spacing: 0.01em;
 }
 
 .charts-grid {

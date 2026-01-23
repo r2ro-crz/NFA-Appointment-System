@@ -1,12 +1,17 @@
 // Enhanced Processor Dashboard JavaScript
 document.addEventListener('DOMContentLoaded', function() {
+    applyUserSettings();
+
     // Always initialize top navigation + notifications (shared across pages)
     initNavigation();
     initNotifications();
+    initWalkInQuickAction();
 
     const isDashboardPage = !!document.getElementById('chart-data-store');
     if (isDashboardPage) {
-        initDashboardAutoRefresh({ intervalMs: 60 * 1000, idleGraceMs: 8000 });
+        if (getUserSettings().autoRefresh) {
+            initDashboardAutoRefresh({ intervalMs: 60 * 1000, idleGraceMs: 8000 });
+        }
     }
 
     // Charts only exist on the dashboard page
@@ -31,6 +36,54 @@ document.addEventListener('DOMContentLoaded', function() {
     initCharts(warehouseCapacity, inventory, available, capacityPercentage, weekDays, weekCounts, weekVolumes);
     initDashboardInteractions();
 });
+
+function getUserSettings() {
+    const defaults = { autoRefresh: true, compact: false, reduceMotion: false, toasts: true };
+    try {
+        const raw = localStorage.getItem('nfa_settings_v1');
+        const obj = raw ? JSON.parse(raw) : null;
+        return {
+            autoRefresh: obj?.autoRefresh ?? defaults.autoRefresh,
+            compact: obj?.compact ?? defaults.compact,
+            reduceMotion: obj?.reduceMotion ?? defaults.reduceMotion,
+            toasts: obj?.toasts ?? defaults.toasts
+        };
+    } catch (_) {
+        return defaults;
+    }
+}
+
+function applyUserSettings() {
+    const s = getUserSettings();
+    window.__nfaSettings = s;
+    document.body.classList.toggle('pref-compact', !!s.compact);
+    document.body.classList.toggle('pref-reduce-motion', !!s.reduceMotion);
+}
+
+function initWalkInQuickAction() {
+    const btn = document.getElementById('walkInQuickAction');
+    if (!btn) return;
+
+    btn.addEventListener('click', function (e) {
+        // Open as a normal new tab (not a sized popup), but still script-opened so
+        // walk_in.php can close itself and return focus to this tab.
+        e.preventDefault();
+
+        const url = this.getAttribute('href') || 'walk_in.php';
+
+        const win = window.open(url, '_blank');
+        if (!win) {
+            // Blocked: fallback to same-tab navigation
+            window.location.href = url;
+            return;
+        }
+        try {
+            win.focus();
+        } catch (_) {
+            // ignore
+        }
+    });
+}
 
 function initDashboardAutoRefresh({ intervalMs, idleGraceMs }) {
     let lastUserActivity = Date.now();
@@ -134,6 +187,7 @@ function initNotifications() {
     const markAllReadBtn = document.getElementById('markAllRead');
     const notifItems = document.querySelectorAll('.notif-item');
     const notifCheckboxes = document.querySelectorAll('.notif-checkbox');
+    const notifDeleteButtons = document.querySelectorAll('.notif-delete');
     
     // Mark all as read
     if (markAllReadBtn) {
@@ -195,7 +249,7 @@ function initNotifications() {
     notifItems.forEach(item => {
         item.addEventListener('click', function(e) {
             // If clicking checkbox area, do nothing (checkbox handler handles it)
-            if (e.target.closest('.notif-check') || e.target.closest('.notif-checkbox')) {
+            if (e.target.closest('.notif-check') || e.target.closest('.notif-checkbox') || e.target.closest('.notif-delete')) {
                 return;
             }
 
@@ -225,6 +279,52 @@ function initNotifications() {
             }
         });
     });
+
+    // Delete notification (must NOT navigate)
+    notifDeleteButtons.forEach(btn => {
+        const activateDelete = (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+
+            const item = btn.closest('.notif-item');
+            if (!item) return;
+
+            const appointmentId = item.getAttribute('data-appointment-id');
+            const wasUnread = item.classList.contains('unread');
+
+            // Optimistic UI update
+            item.remove();
+            if (wasUnread) {
+                updateNotifCount(-1);
+            }
+
+            deleteNotification(appointmentId);
+
+            // If list is empty, show placeholder
+            const list = document.getElementById('notifList');
+            if (list && list.querySelectorAll('.notif-item').length === 0) {
+                list.innerHTML = `
+                    <div class="no-notifications">
+                        <i class="fas fa-check-circle"></i>
+                        <p>No new notifications</p>
+                    </div>
+                `;
+                const markAll = document.getElementById('markAllRead');
+                if (markAll) markAll.remove();
+            }
+
+            if (typeof showToast === 'function') {
+                showToast('Notification deleted', 'success');
+            }
+        };
+
+        btn.addEventListener('click', activateDelete);
+        btn.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter' || e.key === ' ') {
+                activateDelete(e);
+            }
+        });
+    });
 }
 
 function updateNotificationStatus(appointmentId, isRead) {
@@ -247,6 +347,32 @@ function updateNotificationStatus(appointmentId, isRead) {
     .catch(error => {
         console.error('Error updating notification:', error);
         showToast('Network error updating notification', 'error');
+    });
+}
+
+function deleteNotification(appointmentId) {
+    fetch('php_helper/api.php?action=deleteNotification', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            appointment_id: appointmentId,
+            user_id: getUserId()
+        })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (!data.success) {
+            console.error('Failed to delete notification:', data.error);
+            if (typeof showToast === 'function') {
+                showToast('Failed to delete notification', 'error');
+            }
+        }
+    })
+    .catch(error => {
+        console.error('Error deleting notification:', error);
+        if (typeof showToast === 'function') {
+            showToast('Network error deleting notification', 'error');
+        }
     });
 }
 
@@ -615,16 +741,15 @@ function updateActivitySummary(data) {
     const totalAppointments = data.counts.reduce((a, b) => a + b, 0);
     const totalVolume = data.volumes.reduce((a, b) => a + b, 0);
     const avgPerDay = totalAppointments / data.counts.length;
-    
-    // Update summary elements
-    const summaryElements = {
-        'Total Appointments': totalAppointments,
-        'Total Volume': totalVolume.toLocaleString() + ' bags',
-        'Avg. per Day': avgPerDay.toFixed(1)
-    };
-    
-    // You would update your DOM elements here
-    console.log('Updated activity summary:', summaryElements);
+
+    const elTotalAppointments = document.getElementById('weeklyTotalAppointments');
+    if (elTotalAppointments) elTotalAppointments.textContent = String(totalAppointments);
+
+    const elTotalVolume = document.getElementById('weeklyTotalVolume');
+    if (elTotalVolume) elTotalVolume.textContent = `${totalVolume.toLocaleString()} bags`;
+
+    const elAvgPerDay = document.getElementById('weeklyAvgPerDay');
+    if (elAvgPerDay) elAvgPerDay.textContent = avgPerDay.toFixed(1);
 }
 
 // Dashboard Interactions
@@ -861,6 +986,9 @@ function updateDashboardStats(data) {
 }
 
 function showToast(message, type = 'info') {
+    const s = window.__nfaSettings || getUserSettings();
+    if (s && s.toasts === false) return;
+
     // Remove existing toasts
     const existingToasts = document.querySelectorAll('.toast');
     existingToasts.forEach(toast => toast.remove());

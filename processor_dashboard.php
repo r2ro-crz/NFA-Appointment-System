@@ -83,26 +83,85 @@ $available_capacity = max(0, $cap['warehouse_capacity'] - $cap['inventory']);
 $capacity_percentage = $cap['warehouse_capacity'] > 0 ? ($cap['inventory'] / $cap['warehouse_capacity']) * 100 : 0;
 
 // Get notifications (appointments table has no created_at; use date/time_slot)
-$notif_stmt = $pdo->prepare("SELECT appointment_id, first_name, last_name, status, date, time_slot, volume, is_read FROM appointments WHERE branch_id = ? AND status IN ('pending', 'cancelled') ORDER BY appointment_id DESC LIMIT 10");
+$has_notif_deleted = false;
+try {
+    $col = $pdo->query("SHOW COLUMNS FROM appointments LIKE 'notif_deleted'")->fetch(PDO::FETCH_ASSOC);
+    $has_notif_deleted = !empty($col);
+} catch (PDOException $e) {
+    $has_notif_deleted = false;
+}
+
+$notif_sql = "SELECT appointment_id, first_name, last_name, status, date, time_slot, volume, is_read FROM appointments WHERE branch_id = ? AND status IN ('pending', 'cancelled')";
+if ($has_notif_deleted) {
+    $notif_sql .= " AND (notif_deleted IS NULL OR notif_deleted = 0)";
+}
+$notif_sql .= " ORDER BY appointment_id DESC LIMIT 10";
+
+$notif_stmt = $pdo->prepare($notif_sql);
 $notif_stmt->execute([$branch_id]);
 $notifications = $notif_stmt->fetchAll(PDO::FETCH_ASSOC);
 $new_count = count(array_filter($notifications, fn($n) => $n['status'] == 'pending' && (empty($n['is_read']) || $n['is_read'] == 0)));
 
-// Get branch-wide appointment stats
+// Earliest pending appointment (for quick navigation)
+$earliest_pending_id = null;
+try {
+    $pending_nav_stmt = $pdo->prepare("SELECT appointment_id
+        FROM appointments
+        WHERE branch_id = ? AND LOWER(status) = 'pending'
+        ORDER BY date ASC, FIELD(time_slot, 'AM', 'PM') ASC, appointment_id ASC
+        LIMIT 1");
+    $pending_nav_stmt->execute([$branch_id]);
+    $earliest_pending_id = $pending_nav_stmt->fetchColumn();
+    if ($earliest_pending_id !== null) {
+        $earliest_pending_id = (int)$earliest_pending_id;
+        if ($earliest_pending_id <= 0) $earliest_pending_id = null;
+    }
+} catch (PDOException $e) {
+    $earliest_pending_id = null;
+}
+
+$pendingQuickHref = $earliest_pending_id ? ('appointments.php?view=' . $earliest_pending_id) : 'appointments.php';
+
+// KPI metrics
 $today = date('Y-m-d');
-$today_stmt = $pdo->prepare("SELECT COUNT(*) as count,
-    SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending,
-    SUM(CASE WHEN status IN ('confirmed','rescheduled') THEN 1 ELSE 0 END) as confirmed
+
+// All-time appointment stats (accurate per-status counts)
+$overall_stmt = $pdo->prepare("SELECT
+    COUNT(*) as total,
+    SUM(CASE WHEN LOWER(status) = 'pending' THEN 1 ELSE 0 END) as pending,
+    SUM(CASE WHEN LOWER(status) = 'confirmed' THEN 1 ELSE 0 END) as confirmed,
+    SUM(CASE WHEN LOWER(status) = 'rescheduled' THEN 1 ELSE 0 END) as rescheduled,
+    SUM(CASE WHEN LOWER(status) = 'completed' THEN 1 ELSE 0 END) as completed,
+    SUM(CASE WHEN LOWER(status) IN ('cancelled','canceled') THEN 1 ELSE 0 END) as cancelled
     FROM appointments
-    WHERE branch_id = ? AND status != 'cancelled'");
-$today_stmt->execute([$branch_id]);
-$today_stats = $today_stmt->fetch(PDO::FETCH_ASSOC);
+    WHERE branch_id = ?");
+$overall_stmt->execute([$branch_id]);
+$overall_stats = $overall_stmt->fetch(PDO::FETCH_ASSOC) ?: [
+    'total' => 0,
+    'pending' => 0,
+    'confirmed' => 0,
+    'rescheduled' => 0,
+    'completed' => 0,
+    'cancelled' => 0,
+];
+
+// Expected to arrive: confirmed appointments scheduled for today and beyond
+// Show this KPI as bags (volume) since it's delivery-focused.
+$expected_stmt = $pdo->prepare("SELECT
+        COUNT(*) as cnt,
+        COALESCE(SUM(volume), 0) as bags
+    FROM appointments
+    WHERE branch_id = ? AND LOWER(status) = 'confirmed' AND date >= ?");
+$expected_stmt->execute([$branch_id, $today]);
+$expected_row = $expected_stmt->fetch(PDO::FETCH_ASSOC) ?: ['cnt' => 0, 'bags' => 0];
+$expected_to_arrive_count = (int)($expected_row['cnt'] ?? 0);
+$expected_to_arrive_bags = (int)($expected_row['bags'] ?? 0);
 
 // Get recent appointments (last 7 days)
 $week_ago = date('Y-m-d', strtotime('-7 days'));
 $weekly_stmt = $pdo->prepare("SELECT DATE(date) as day, COUNT(*) as count, 
     SUM(volume) as total_volume FROM appointments 
-    WHERE branch_id = ? AND date >= ? AND status != 'cancelled'
+    WHERE branch_id = ? AND date >= ? AND LOWER(status) NOT IN ('cancelled','canceled')
     GROUP BY DATE(date) ORDER BY day");
 $weekly_stmt->execute([$branch_id, $week_ago]);
 $weekly_data = $weekly_stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -132,15 +191,7 @@ for ($i = 6; $i >= 0; $i--) {
     }
 }
 
-// Get top farmers by volume
-$farmer_stmt = $pdo->prepare("SELECT farmer_id, first_name, last_name, SUM(volume) as total_volume 
-    FROM appointments 
-    WHERE branch_id = ? AND status != 'cancelled'
-    GROUP BY farmer_id 
-    ORDER BY total_volume DESC 
-    LIMIT 5");
-$farmer_stmt->execute([$branch_id]);
-$top_farmers = $farmer_stmt->fetchAll(PDO::FETCH_ASSOC);
+
 ?>
 
 <!DOCTYPE html>
@@ -192,10 +243,6 @@ $top_farmers = $farmer_stmt->fetchAll(PDO::FETCH_ASSOC);
                 <a href="reports.php" class="nav-link">
                     <i class="fas fa-chart-bar"></i>
                     <span>Reports</span>
-                </a>
-                <a href="farmers.php" class="nav-link">
-                    <i class="fas fa-users"></i>
-                    <span>Farmers</span>
                 </a>
             </div>
         </div>
@@ -258,6 +305,9 @@ $top_farmers = $farmer_stmt->fetchAll(PDO::FETCH_ASSOC);
                                             <input class="notif-checkbox" type="checkbox" <?php echo $unread ? '' : 'checked'; ?> aria-label="Toggle read status">
                                             <span class="notif-check-ui" aria-hidden="true"></span>
                                         </label>
+                                        <span class="notif-delete" role="button" tabindex="0" title="Delete notification" aria-label="Delete notification">
+                                            <i class="fas fa-trash"></i>
+                                        </span>
                                     </div>
                                 </a>
                             <?php endforeach; ?>
@@ -297,10 +347,20 @@ $top_farmers = $farmer_stmt->fetchAll(PDO::FETCH_ASSOC);
                     </div>
                     <div class="user-dropdown-menu">
                         <a href="profile.php" class="dropdown-item">
-                            <i class="fas fa-user-cog"></i> My Profile
+                            <i class="fas fa-user-cog"></i>
+                            <span class="dropdown-item-content">
+                                <span class="dropdown-item-title">My Profile</span>
+                                <span class="dropdown-item-desc">View and update your account</span>
+                            </span>
+                            <i class="fas fa-chevron-right dropdown-item-arrow"></i>
                         </a>
                         <a href="settings.php" class="dropdown-item">
-                            <i class="fas fa-cog"></i> Settings
+                            <i class="fas fa-cog"></i>
+                            <span class="dropdown-item-content">
+                                <span class="dropdown-item-title">Settings</span>
+                                <span class="dropdown-item-desc">Preferences and appearance</span>
+                            </span>
+                            <i class="fas fa-chevron-right dropdown-item-arrow"></i>
                         </a>
                         <div class="dropdown-divider"></div>
                         <a href="login.php" class="dropdown-item logout">
@@ -398,19 +458,81 @@ $top_farmers = $farmer_stmt->fetchAll(PDO::FETCH_ASSOC);
             <div class="stat-card">
                 <div class="stat-header">
                     <i class="fas fa-calendar-day"></i>
-                    <h4>Branch Appointments</h4>
+                    <h4>Expected to Arrive</h4>
                 </div>
                 <div class="stat-content">
-                    <div class="stat-value"><?php echo $today_stats ? $today_stats['count'] : 0; ?></div>
+                    <div class="stat-value"><?php echo number_format($expected_to_arrive_bags); ?></div>
                     <div class="stat-label">
-                        <span class="status-dot pending"></span> <?php echo $today_stats ? $today_stats['pending'] : 0; ?> pending
-                        <span class="status-dot confirmed"></span> <?php echo $today_stats ? $today_stats['confirmed'] : 0; ?> confirmed
+                        <span class="status-dot confirmed"></span> Bags to be delivered
                     </div>
                 </div>
                 <div class="stat-trend">
-                    <a href="appointments.php?date=<?php echo $today; ?>" class="view-details">
+                    <a href="appointments.php?date=<?php echo urlencode(date('Y-m-d')); ?>&month=<?php echo (int)date('n'); ?>&year=<?php echo (int)date('Y'); ?>" class="view-details">
                         <i class="fas fa-external-link-alt"></i> View Today
                     </a>
+                </div>
+            </div>
+        </div>
+
+        <!-- Status KPIs (All time) -->
+        <div class="stats-overview stats-overview-status">
+            <div class="stat-card stat-card-compact status-total">
+                <div class="stat-header">
+                    <i class="fas fa-list-check"></i>
+                    <h4>Total Appointments</h4>
+                </div>
+                <div class="stat-content">
+                    <div class="stat-value"><?php echo (int)($overall_stats['total'] ?? 0); ?></div>
+                </div>
+            </div>
+
+            <div class="stat-card stat-card-compact status-completed">
+                <div class="stat-header">
+                    <i class="fas fa-circle-check"></i>
+                    <h4>Completed</h4>
+                </div>
+                <div class="stat-content">
+                    <div class="stat-value"><?php echo (int)($overall_stats['completed'] ?? 0); ?></div>
+                </div>
+            </div>
+
+            <div class="stat-card stat-card-compact status-confirmed">
+                <div class="stat-header">
+                    <i class="fas fa-circle-check"></i>
+                    <h4>Confirmed</h4>
+                </div>
+                <div class="stat-content">
+                    <div class="stat-value"><?php echo (int)($overall_stats['confirmed'] ?? 0); ?></div>
+                </div>
+            </div>
+
+            <div class="stat-card stat-card-compact status-rescheduled">
+                <div class="stat-header">
+                    <i class="fas fa-clock-rotate-left"></i>
+                    <h4>Rescheduled</h4>
+                </div>
+                <div class="stat-content">
+                    <div class="stat-value"><?php echo (int)($overall_stats['rescheduled'] ?? 0); ?></div>
+                </div>
+            </div>
+
+            <div class="stat-card stat-card-compact status-pending">
+                <div class="stat-header">
+                    <i class="fas fa-hourglass-half"></i>
+                    <h4>Pending</h4>
+                </div>
+                <div class="stat-content">
+                    <div class="stat-value"><?php echo (int)($overall_stats['pending'] ?? 0); ?></div>
+                </div>
+            </div>
+
+            <div class="stat-card stat-card-compact status-cancelled">
+                <div class="stat-header">
+                    <i class="fas fa-ban"></i>
+                    <h4>Cancelled</h4>
+                </div>
+                <div class="stat-content">
+                    <div class="stat-value"><?php echo (int)($overall_stats['cancelled'] ?? 0); ?></div>
                 </div>
             </div>
         </div>
@@ -478,15 +600,15 @@ $top_farmers = $farmer_stmt->fetchAll(PDO::FETCH_ASSOC);
                         <div class="chart-summary">
                             <div class="summary-item">
                                 <span class="summary-label">Total Appointments</span>
-                                <span class="summary-value"><?php echo array_sum($week_counts); ?></span>
+                                <span class="summary-value" id="weeklyTotalAppointments"><?php echo array_sum($week_counts); ?></span>
                             </div>
                             <div class="summary-item">
                                 <span class="summary-label">Total Volume</span>
-                                <span class="summary-value"><?php echo number_format(array_sum($week_volumes)); ?> bags</span>
+                                <span class="summary-value" id="weeklyTotalVolume"><?php echo number_format(array_sum($week_volumes)); ?> bags</span>
                             </div>
                             <div class="summary-item">
                                 <span class="summary-label">Avg. per Day</span>
-                                <span class="summary-value"><?php echo round(array_sum($week_counts) / 7, 1); ?></span>
+                                <span class="summary-value" id="weeklyAvgPerDay"><?php echo round(array_sum($week_counts) / 7, 1); ?></span>
                             </div>
                         </div>
                     </div>
@@ -567,54 +689,6 @@ $top_farmers = $farmer_stmt->fetchAll(PDO::FETCH_ASSOC);
                     </div>
                 </div>
 
-                <!-- Top Farmers -->
-                <div class="dashboard-card">
-                    <div class="card-header">
-                        <h3><i class="fas fa-crown"></i> Top Farmers</h3>
-                        <span class="period-label">This Month</span>
-                    </div>
-                    <div class="card-body">
-                        <?php if (count($top_farmers) > 0): ?>
-                            <div class="top-farmers-list">
-                                <?php $rank = 1; ?>
-                                <?php foreach ($top_farmers as $farmer): ?>
-                                    <div class="farmer-rank-item">
-                                        <div class="rank-number"><?php echo $rank; ?></div>
-                                        <div class="farmer-avatar">
-                                            <i class="fas fa-user-circle"></i>
-                                        </div>
-                                        <div class="farmer-info">
-                                            <div class="farmer-name">
-                                                <?php echo htmlspecialchars($farmer['first_name'] . ' ' . $farmer['last_name']); ?>
-                                            </div>
-                                            <div class="farmer-id">
-                                                ID: <?php echo htmlspecialchars($farmer['farmer_id']); ?>
-                                            </div>
-                                        </div>
-                                        <div class="farmer-volume">
-                                            <i class="fas fa-weight-hanging"></i>
-                                            <span class="volume-value"><?php echo number_format($farmer['total_volume']); ?></span>
-                                            <span class="volume-label">bags</span>
-                                        </div>
-                                    </div>
-                                    <?php $rank++; ?>
-                                <?php endforeach; ?>
-                            </div>
-                        <?php else: ?>
-                            <div class="empty-state">
-                                <i class="fas fa-users"></i>
-                                <p>No farmer data available</p>
-                            </div>
-                        <?php endif; ?>
-                        
-                        <div class="card-footer">
-                            <a href="farmers.php" class="view-all-link">
-                                <i class="fas fa-chart-bar"></i> View Farmer Analytics
-                            </a>
-                        </div>
-                    </div>
-                </div>
-
                 <!-- Quick Actions -->
                 <div class="dashboard-card">
                     <div class="card-header">
@@ -622,7 +696,7 @@ $top_farmers = $farmer_stmt->fetchAll(PDO::FETCH_ASSOC);
                     </div>
                     <div class="card-body">
                         <div class="quick-actions-grid">
-                            <a href="appointments.php" class="quick-action pending">
+                            <a href="<?php echo htmlspecialchars($pendingQuickHref); ?>" class="quick-action pending" title="Go to earliest pending appointment">
                                 <i class="fas fa-clock"></i>
                                 <span>Pending Approvals</span>
                                 <?php if ($new_count > 0): ?>
@@ -637,9 +711,9 @@ $top_farmers = $farmer_stmt->fetchAll(PDO::FETCH_ASSOC);
                                 <i class="fas fa-file-alt"></i>
                                 <span>Daily Report</span>
                             </a>
-                            <a href="appointments.php" class="quick-action add">
-                                <i class="fas fa-plus-circle"></i>
-                                <span>Add Appointment</span>
+                            <a href="walk_in.php" class="quick-action add" id="walkInQuickAction" title="Open Walk-in Process">
+                                <i class="fas fa-person-walking"></i>
+                                <span>Walk-in Process</span>
                             </a>
                         </div>
                     </div>

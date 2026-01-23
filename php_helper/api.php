@@ -298,6 +298,305 @@ switch ($action) {
         }
         break;
 
+    case 'verifyTrackerIdentity':
+        // Public identity verification for tracker actions (cancel/confirm)
+        try {
+            $data = json_decode(file_get_contents('php://input'), true);
+            if (!is_array($data)) $data = [];
+
+            $reference_number = (string)sanitize_input($data['reference_number'] ?? ($data['ref'] ?? ''));
+            $reference_number = strtoupper(preg_replace('/\s+/', '', $reference_number));
+            $farmer_id = (string)sanitize_input($data['farmer_id'] ?? '');
+            $email = (string)sanitize_input($data['email'] ?? '');
+
+            if ($reference_number === '' || !preg_match('/^NFA\d{8}[A-Z0-9]{6}$/', $reference_number)) {
+                http_response_code(400);
+                echo json_encode(['success' => false, 'error' => 'Invalid reference number.']);
+                break;
+            }
+
+            if (trim($farmer_id) === '' && trim($email) === '') {
+                http_response_code(400);
+                echo json_encode(['success' => false, 'error' => 'Please provide Farmer ID or Email for verification.']);
+                break;
+            }
+
+            if ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+                http_response_code(400);
+                echo json_encode(['success' => false, 'error' => 'Invalid email format.']);
+                break;
+            }
+
+            $stmt = $pdo->prepare('SELECT farmer_id, email FROM appointments WHERE reference_number = ? LIMIT 1');
+            $stmt->execute([$reference_number]);
+            $appt = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$appt) {
+                http_response_code(404);
+                echo json_encode(['success' => false, 'error' => 'Appointment not found.']);
+                break;
+            }
+
+            if (trim($farmer_id) !== '' && (string)$appt['farmer_id'] !== (string)$farmer_id) {
+                http_response_code(403);
+                echo json_encode(['success' => false, 'error' => 'Verification failed. Farmer ID does not match this reference.']);
+                break;
+            }
+
+            if (trim($email) !== '' && strtolower((string)$appt['email']) !== strtolower((string)$email)) {
+                http_response_code(403);
+                echo json_encode(['success' => false, 'error' => 'Verification failed. Email does not match this reference.']);
+                break;
+            }
+
+            echo json_encode(['success' => true]);
+        } catch (\PDOException $e) {
+            error_log('verifyTrackerIdentity failed: ' . $e->getMessage());
+            http_response_code(500);
+            echo json_encode(['success' => false, 'error' => 'Failed to verify identity.']);
+        }
+        break;
+
+    case 'cancelAppointmentByTracker':
+        // Farmer-facing cancellation (via public tracker) with reason capture
+        try {
+            $data = json_decode(file_get_contents('php://input'), true);
+            if (!is_array($data)) $data = [];
+
+            $reference_number = (string)sanitize_input($data['reference_number'] ?? '');
+            $reference_number = strtoupper(preg_replace('/\s+/', '', $reference_number));
+            $farmer_id = (string)sanitize_input($data['farmer_id'] ?? '');
+            $email = (string)sanitize_input($data['email'] ?? '');
+            $reason_code = (string)sanitize_input($data['reason_code'] ?? '');
+            $reason_detail = (string)sanitize_input($data['reason_detail'] ?? '');
+
+            if ($reference_number === '' || !preg_match('/^NFA\d{8}[A-Z0-9]{6}$/', $reference_number)) {
+                http_response_code(400);
+                echo json_encode(['success' => false, 'error' => 'Invalid reference number.']);
+                break;
+            }
+
+            // Require at least one identity signal for public actions
+            if (trim($farmer_id) === '' && trim($email) === '') {
+                http_response_code(400);
+                echo json_encode(['success' => false, 'error' => 'Please provide Farmer ID or Email for verification.']);
+                break;
+            }
+
+            if ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+                http_response_code(400);
+                echo json_encode(['success' => false, 'error' => 'Invalid email format.']);
+                break;
+            }
+
+            $allowedReasons = ['schedule_conflict', 'no_longer_available', 'wrong_details', 'other'];
+            if ($reason_code === '' || !in_array($reason_code, $allowedReasons, true)) {
+                http_response_code(400);
+                echo json_encode(['success' => false, 'error' => 'Please select a valid cancellation reason.']);
+                break;
+            }
+
+            if ($reason_code === 'other' && trim($reason_detail) === '') {
+                http_response_code(400);
+                echo json_encode(['success' => false, 'error' => 'Details are required when reason is “Other”.']);
+                break;
+            }
+
+            // Lookup appointment by reference
+            $stmt = $pdo->prepare("SELECT a.appointment_id, a.status, a.email, a.farmer_id, a.first_name, a.last_name, a.suffix, a.date, a.time_slot, a.volume, b.branch_name
+                FROM appointments a
+                LEFT JOIN branch b ON a.branch_id = b.branch_id
+                WHERE a.reference_number = ?
+                LIMIT 1");
+            $stmt->execute([$reference_number]);
+            $appt = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$appt) {
+                http_response_code(404);
+                echo json_encode(['success' => false, 'error' => 'Appointment not found.']);
+                break;
+            }
+
+            // Verify identity matches
+            if (trim($farmer_id) !== '' && (string)$appt['farmer_id'] !== (string)$farmer_id) {
+                http_response_code(403);
+                echo json_encode(['success' => false, 'error' => 'Verification failed (Farmer ID does not match).']);
+                break;
+            }
+            if (trim($email) !== '' && strtolower((string)$appt['email']) !== strtolower((string)$email)) {
+                http_response_code(403);
+                echo json_encode(['success' => false, 'error' => 'Verification failed (Email does not match).']);
+                break;
+            }
+
+            $status = strtolower((string)($appt['status'] ?? ''));
+            if ($status === 'cancelled' || $status === 'canceled') {
+                echo json_encode(['success' => true, 'already' => true]);
+                break;
+            }
+            if ($status === 'completed') {
+                http_response_code(400);
+                echo json_encode(['success' => false, 'error' => 'Completed appointments cannot be cancelled.']);
+                break;
+            }
+
+            // Save cancellation details (best-effort)
+            try {
+                $pdo->exec("CREATE TABLE IF NOT EXISTS appointment_cancellations (
+                    cancellation_id INT(11) NOT NULL AUTO_INCREMENT,
+                    appointment_id INT(11) NOT NULL,
+                    reference_number VARCHAR(255) NOT NULL,
+                    reason_code VARCHAR(50) NOT NULL,
+                    reason_detail TEXT NULL,
+                    cancelled_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (cancellation_id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci");
+
+                $stmtIns = $pdo->prepare('INSERT INTO appointment_cancellations (appointment_id, reference_number, reason_code, reason_detail) VALUES (?, ?, ?, ?)');
+                $stmtIns->execute([(int)$appt['appointment_id'], $reference_number, $reason_code, $reason_detail]);
+            } catch (\PDOException $e) {
+                // Don't block cancellation if log table isn't available
+                error_log('Cancellation log insert failed: ' . $e->getMessage());
+            }
+
+            // Update status
+            $stmtUp = $pdo->prepare("UPDATE appointments SET status = 'cancelled' WHERE appointment_id = ? AND status NOT IN ('cancelled','completed')");
+            $stmtUp->execute([(int)$appt['appointment_id']]);
+            if ($stmtUp->rowCount() < 1) {
+                http_response_code(400);
+                echo json_encode(['success' => false, 'error' => 'Unable to cancel this appointment.']);
+                break;
+            }
+
+            // Notify via email (best-effort)
+            $emailSent = false;
+            if (!empty($appt['email']) && filter_var($appt['email'], FILTER_VALIDATE_EMAIL)) {
+                $farmerName = trim(($appt['first_name'] ?? '') . ' ' . ($appt['last_name'] ?? '') . (!empty($appt['suffix']) ? (' ' . $appt['suffix']) : ''));
+                $branchName = $appt['branch_name'] ?: 'NFA Branch';
+                $reasonExtra = '<p style="margin:14px 0 0 0"><strong>Status:</strong> Cancelled</p>';
+                $reasonExtra .= '<p style="margin:8px 0 0 0"><strong>Reason:</strong> ' . htmlspecialchars($reason_code, ENT_QUOTES, 'UTF-8') . '</p>';
+                if (trim($reason_detail) !== '') {
+                    $reasonExtra .= '<p style="margin:6px 0 0 0"><strong>Details:</strong> ' . nl2br(htmlspecialchars($reason_detail, ENT_QUOTES, 'UTF-8')) . '</p>';
+                }
+
+                $body = nfa_build_farmer_status_email(
+                    'Appointment Cancelled',
+                    $farmerName !== '' ? $farmerName : 'Farmer',
+                    $reference_number,
+                    $branchName,
+                    $appt['date'] ?? '',
+                    $appt['time_slot'] ?? '',
+                    $appt['volume'] ?? 0,
+                    $reasonExtra
+                );
+                $send = nfa_send_html_email_best_effort($appt['email'], 'NFA Appointment Cancelled: ' . $reference_number, $body);
+                $emailSent = !empty($send['sent']);
+            }
+
+            echo json_encode(['success' => true, 'email_sent' => $emailSent]);
+        } catch (\PDOException $e) {
+            error_log('cancelAppointmentByTracker failed: ' . $e->getMessage());
+            http_response_code(500);
+            echo json_encode(['success' => false, 'error' => 'Failed to cancel appointment.']);
+        }
+        break;
+
+    case 'confirmRescheduledByTracker':
+        // Farmer-facing confirm for rescheduled appointments (via public tracker)
+        try {
+            $data = json_decode(file_get_contents('php://input'), true);
+            if (!is_array($data)) $data = [];
+
+            $reference_number = (string)sanitize_input($data['reference_number'] ?? '');
+            $reference_number = strtoupper(preg_replace('/\s+/', '', $reference_number));
+            $farmer_id = (string)sanitize_input($data['farmer_id'] ?? '');
+            $email = (string)sanitize_input($data['email'] ?? '');
+
+            if ($reference_number === '' || !preg_match('/^NFA\d{8}[A-Z0-9]{6}$/', $reference_number)) {
+                http_response_code(400);
+                echo json_encode(['success' => false, 'error' => 'Invalid reference number.']);
+                break;
+            }
+
+            if (trim($farmer_id) === '' && trim($email) === '') {
+                http_response_code(400);
+                echo json_encode(['success' => false, 'error' => 'Please provide Farmer ID or Email for verification.']);
+                break;
+            }
+
+            if ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+                http_response_code(400);
+                echo json_encode(['success' => false, 'error' => 'Invalid email format.']);
+                break;
+            }
+
+            $stmt = $pdo->prepare("SELECT a.appointment_id, a.status, a.email, a.farmer_id, a.first_name, a.last_name, a.suffix, a.date, a.time_slot, a.volume, b.branch_name
+                FROM appointments a
+                LEFT JOIN branch b ON a.branch_id = b.branch_id
+                WHERE a.reference_number = ?
+                LIMIT 1");
+            $stmt->execute([$reference_number]);
+            $appt = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$appt) {
+                http_response_code(404);
+                echo json_encode(['success' => false, 'error' => 'Appointment not found.']);
+                break;
+            }
+
+            if (trim($farmer_id) !== '' && (string)$appt['farmer_id'] !== (string)$farmer_id) {
+                http_response_code(403);
+                echo json_encode(['success' => false, 'error' => 'Verification failed (Farmer ID does not match).']);
+                break;
+            }
+            if (trim($email) !== '' && strtolower((string)$appt['email']) !== strtolower((string)$email)) {
+                http_response_code(403);
+                echo json_encode(['success' => false, 'error' => 'Verification failed (Email does not match).']);
+                break;
+            }
+
+            $status = strtolower((string)($appt['status'] ?? ''));
+            if ($status !== 'rescheduled') {
+                http_response_code(400);
+                echo json_encode(['success' => false, 'error' => 'Only rescheduled appointments can be confirmed.']);
+                break;
+            }
+
+            $stmtUp = $pdo->prepare("UPDATE appointments SET status = 'confirmed' WHERE appointment_id = ? AND status = 'rescheduled'");
+            $stmtUp->execute([(int)$appt['appointment_id']]);
+            if ($stmtUp->rowCount() < 1) {
+                http_response_code(400);
+                echo json_encode(['success' => false, 'error' => 'Unable to confirm this appointment.']);
+                break;
+            }
+
+            $emailSent = false;
+            if (!empty($appt['email']) && filter_var($appt['email'], FILTER_VALIDATE_EMAIL)) {
+                $farmerName = trim(($appt['first_name'] ?? '') . ' ' . ($appt['last_name'] ?? '') . (!empty($appt['suffix']) ? (' ' . $appt['suffix']) : ''));
+                $branchName = $appt['branch_name'] ?: 'NFA Branch';
+                $extra = '<p style="margin:14px 0 0 0"><strong>Status:</strong> Confirmed</p>';
+                $body = nfa_build_farmer_status_email(
+                    'Appointment Confirmed',
+                    $farmerName !== '' ? $farmerName : 'Farmer',
+                    $reference_number,
+                    $branchName,
+                    $appt['date'] ?? '',
+                    $appt['time_slot'] ?? '',
+                    $appt['volume'] ?? 0,
+                    $extra
+                );
+                $send = nfa_send_html_email_best_effort($appt['email'], 'NFA Appointment Confirmed: ' . $reference_number, $body);
+                $emailSent = !empty($send['sent']);
+            }
+
+            echo json_encode(['success' => true, 'email_sent' => $emailSent]);
+        } catch (\PDOException $e) {
+            error_log('confirmRescheduledByTracker failed: ' . $e->getMessage());
+            http_response_code(500);
+            echo json_encode(['success' => false, 'error' => 'Failed to confirm appointment.']);
+        }
+        break;
+
     case 'getRegions':
         // 1. Get Regions
         try {
@@ -477,7 +776,13 @@ switch ($action) {
         try {
             $stmt = $pdo->query("SELECT farmer_type_id, type_name FROM farmer_type ORDER BY type_name");
             $types = $stmt->fetchAll(PDO::FETCH_ASSOC);
-            echo json_encode(['success' => true, 'data' => $types]);
+            echo json_encode([
+                'success' => true,
+                // keep existing key for backwards compatibility
+                'data' => $types,
+                // add explicit key used by newer UI code
+                'farmerTypes' => $types
+            ]);
         } catch (\PDOException $e) {
             error_log("Farmer Types fetch failed: " . $e->getMessage());
             echo json_encode(['success' => false, 'error' => 'Failed to retrieve farmer types.']);
@@ -688,13 +993,24 @@ switch ($action) {
                 throw new \PDOException("Invalid branch_id or region not found");
             }
 
+            // Ensure appointments.mode exists for tracking entry source (appointment vs walk-in)
+            try {
+                $colStmt = $pdo->query("SHOW COLUMNS FROM appointments LIKE 'mode'");
+                $col = $colStmt ? $colStmt->fetch(PDO::FETCH_ASSOC) : false;
+                if (!$col) {
+                    $pdo->exec("ALTER TABLE appointments ADD COLUMN mode VARCHAR(20) NOT NULL DEFAULT 'appointment'");
+                }
+            } catch (PDOException $e) {
+                // Best-effort: keep working even if ALTER fails
+            }
+
             // Insert into appointments table (including farmer_id and suffix)
             $sql = "INSERT INTO appointments 
                     (branch_id, region_id, date, time_slot, first_name, middle_name, last_name, 
-                     farmer_id, suffix, email, contact_number, gender, volume, farmer_type_id, status, reference_number) 
+                     farmer_id, suffix, email, contact_number, gender, volume, farmer_type_id, status, reference_number, mode) 
                     VALUES 
                     (:branch_id, :region_id, :date, :time_slot, :first_name, :middle_name, :last_name,
-                     :farmer_id, :suffix, :email, :contact_number, :gender, :volume, :farmer_type_id, 'pending', :reference_number)";
+                     :farmer_id, :suffix, :email, :contact_number, :gender, :volume, :farmer_type_id, 'pending', :reference_number, 'appointment')";
 
             $stmt = $pdo->prepare($sql);
             $params = [
@@ -896,7 +1212,368 @@ switch ($action) {
         }
         break;
 
+    // --- Walk-in: lookup farmer details from latest appointment (Processor only) ---
+    case 'lookupFarmerById':
+        if (!isset($_SESSION['loggedin']) || ($_SESSION['user_type'] ?? '') !== 'Processor') {
+            http_response_code(401);
+            echo json_encode(['success' => false, 'error' => 'Unauthorized']);
+            break;
+        }
+
+        $branch_id = (int)($_SESSION['branch_id'] ?? 0);
+        $farmer_id = (string)sanitize_input($_GET['farmer_id'] ?? '');
+        $farmer_id = trim($farmer_id);
+        if ($branch_id <= 0 || $farmer_id === '') {
+            http_response_code(400);
+            echo json_encode(['success' => false, 'error' => 'Missing branch or farmer ID']);
+            break;
+        }
+
+        try {
+            $stmt = $pdo->prepare("SELECT farmer_id, first_name, middle_name, last_name, suffix, email, contact_number, gender, farmer_type_id
+                FROM appointments
+                WHERE branch_id = ? AND farmer_id = ?
+                ORDER BY appointment_id DESC
+                LIMIT 1");
+            $stmt->execute([$branch_id, $farmer_id]);
+            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+            if (!$row) {
+                echo json_encode(['success' => true, 'found' => false]);
+                break;
+            }
+
+            echo json_encode([
+                'success' => true,
+                'found' => true,
+                'farmer' => [
+                    'farmer_id' => (string)($row['farmer_id'] ?? ''),
+                    'first_name' => (string)($row['first_name'] ?? ''),
+                    'middle_name' => (string)($row['middle_name'] ?? ''),
+                    'last_name' => (string)($row['last_name'] ?? ''),
+                    'suffix' => (string)($row['suffix'] ?? ''),
+                    'email' => (string)($row['email'] ?? ''),
+                    'contact_number' => (string)($row['contact_number'] ?? ''),
+                    'gender' => (string)($row['gender'] ?? ''),
+                    'farmer_type_id' => (int)($row['farmer_type_id'] ?? 0),
+                ]
+            ]);
+        } catch (PDOException $e) {
+            http_response_code(500);
+            echo json_encode(['success' => false, 'error' => 'Lookup failed']);
+        }
+        break;
+
+    // --- Walk-in: create appointment record (Processor only) ---
+    case 'createWalkInAppointment':
+        if (!isset($_SESSION['loggedin']) || ($_SESSION['user_type'] ?? '') !== 'Processor') {
+            http_response_code(401);
+            echo json_encode(['success' => false, 'error' => 'Unauthorized']);
+            break;
+        }
+
+        $branch_id = (int)($_SESSION['branch_id'] ?? 0);
+        if ($branch_id <= 0) {
+            http_response_code(400);
+            echo json_encode(['success' => false, 'error' => 'Missing branch']);
+            break;
+        }
+
+        $data = json_decode(file_get_contents('php://input'), true);
+        if (!is_array($data)) $data = [];
+
+        $date = (string)sanitize_input($data['date'] ?? date('Y-m-d'));
+        $time_slot = strtoupper((string)sanitize_input($data['time_slot'] ?? ''));
+        $farmer_id = (string)sanitize_input($data['farmer_id'] ?? '');
+        $first_name = (string)sanitize_input($data['first_name'] ?? '');
+        $middle_name = (string)sanitize_input($data['middle_name'] ?? '');
+        $last_name = (string)sanitize_input($data['last_name'] ?? '');
+        $suffix = (string)sanitize_input($data['suffix'] ?? '');
+        $email = (string)sanitize_input($data['email'] ?? '');
+        $contact_number = (string)sanitize_input($data['contact_number'] ?? '');
+        $gender = (string)sanitize_input($data['gender'] ?? '');
+        $volume = $data['volume'] ?? null;
+        $farmer_type_id = (int)sanitize_input($data['farmer_type_id'] ?? 0);
+
+        $farmer_id = trim($farmer_id);
+        $first_name = trim($first_name);
+        $middle_name = trim($middle_name);
+        $last_name = trim($last_name);
+        $suffix = trim($suffix);
+        $email = trim($email);
+        $contact_number = trim($contact_number);
+        $gender = trim($gender);
+
+        if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) {
+            http_response_code(400);
+            echo json_encode(['success' => false, 'error' => 'Invalid date']);
+            break;
+        }
+        if (!in_array($time_slot, ['AM', 'PM'], true)) {
+            http_response_code(400);
+            echo json_encode(['success' => false, 'error' => 'Invalid time slot']);
+            break;
+        }
+        if ($farmer_id === '' || $first_name === '' || $middle_name === '' || $last_name === '' || $email === '' || $contact_number === '' || $gender === '' || $farmer_type_id <= 0) {
+            http_response_code(400);
+            echo json_encode(['success' => false, 'error' => 'Please complete all required fields']);
+            break;
+        }
+        if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            http_response_code(400);
+            echo json_encode(['success' => false, 'error' => 'Invalid email']);
+            break;
+        }
+
+        $genderLower = strtolower($gender);
+        if (!in_array($genderLower, ['male', 'female', 'other'], true)) {
+            http_response_code(400);
+            echo json_encode(['success' => false, 'error' => 'Invalid gender']);
+            break;
+        }
+        $gender = $genderLower;
+
+        // Normalize PH contact number to 09XXXXXXXXX
+        $contact_digits = preg_replace('/\D+/', '', $contact_number);
+        if (preg_match('/^639\d{9}$/', $contact_digits)) {
+            $contact_digits = '0' . substr($contact_digits, 2);
+        }
+        if (!preg_match('/^09\d{9}$/', $contact_digits)) {
+            http_response_code(400);
+            echo json_encode(['success' => false, 'error' => 'Invalid contact number']);
+            break;
+        }
+        $contact_number = $contact_digits;
+
+        if (!is_numeric($volume) || (float)$volume <= 0) {
+            http_response_code(400);
+            echo json_encode(['success' => false, 'error' => 'Invalid volume']);
+            break;
+        }
+
+        // Generate reference number
+        $reference_number = 'NFA' . date('Ymd') . strtoupper(substr(md5(uniqid(rand(), true)), 0, 6));
+        try {
+            // Best-effort uniqueness
+            for ($i = 0; $i < 5; $i++) {
+                $stmt_ref = $pdo->prepare('SELECT COUNT(*) FROM appointments WHERE reference_number = ?');
+                $stmt_ref->execute([$reference_number]);
+                $exists = (int)$stmt_ref->fetchColumn() > 0;
+                if (!$exists) break;
+                $reference_number = 'NFA' . date('Ymd') . strtoupper(substr(md5(uniqid(rand(), true)), 0, 6));
+            }
+        } catch (PDOException $e) {
+            // ignore
+        }
+
+        try {
+            $pdo->beginTransaction();
+
+            // Ensure mode exists
+            try {
+                $colStmt = $pdo->query("SHOW COLUMNS FROM appointments LIKE 'mode'");
+                $col = $colStmt ? $colStmt->fetch(PDO::FETCH_ASSOC) : false;
+                if (!$col) {
+                    $pdo->exec("ALTER TABLE appointments ADD COLUMN mode VARCHAR(20) NOT NULL DEFAULT 'appointment'");
+                }
+            } catch (PDOException $e) {
+                // Best-effort
+            }
+
+            // Get region_id from branch
+            $stmt_region = $pdo->prepare("SELECT region_id FROM branch WHERE branch_id = ?");
+            $stmt_region->execute([$branch_id]);
+            $region_id = $stmt_region->fetchColumn();
+            if (!$region_id) {
+                throw new PDOException('Invalid branch');
+            }
+
+            // Record as completed by default (walk-in is already processed in-person)
+            $sql = "INSERT INTO appointments
+                    (branch_id, region_id, date, time_slot, first_name, middle_name, last_name,
+                     farmer_id, suffix, email, contact_number, gender, volume, farmer_type_id, status, reference_number, mode, is_read)
+                    VALUES
+                    (:branch_id, :region_id, :date, :time_slot, :first_name, :middle_name, :last_name,
+                     :farmer_id, :suffix, :email, :contact_number, :gender, :volume, :farmer_type_id, 'completed', :reference_number, 'walk-in', 1)";
+
+            $stmt = $pdo->prepare($sql);
+            $stmt->execute([
+                ':branch_id' => $branch_id,
+                ':region_id' => (int)$region_id,
+                ':date' => $date,
+                ':time_slot' => $time_slot,
+                ':first_name' => $first_name,
+                ':middle_name' => $middle_name,
+                ':last_name' => $last_name,
+                ':farmer_id' => $farmer_id,
+                ':suffix' => $suffix,
+                ':email' => $email,
+                ':contact_number' => $contact_number,
+                ':gender' => $gender,
+                ':volume' => (float)$volume,
+                ':farmer_type_id' => $farmer_type_id,
+                ':reference_number' => $reference_number,
+            ]);
+
+            $appointment_id = (int)$pdo->lastInsertId();
+
+            // Walk-in should affect branch inventory just like recording a delivery.
+            // Inventory represents actual received bags: ADD the walk-in volume.
+            $stmtCap = $pdo->prepare("SELECT volume_id, warehouse_capacity, inventory FROM volume_capacity WHERE branch_id = ? FOR UPDATE");
+            $stmtCap->execute([$branch_id]);
+            $cap = $stmtCap->fetch(PDO::FETCH_ASSOC);
+
+            if ($cap) {
+                $new_inventory = (float)($cap['inventory'] ?? 0) + (float)$volume;
+                $stmtInv = $pdo->prepare("UPDATE volume_capacity SET inventory = ? WHERE branch_id = ?");
+                $stmtInv->execute([$new_inventory, $branch_id]);
+                $warehouse_capacity = (float)($cap['warehouse_capacity'] ?? 0);
+            } else {
+                // If capacity row doesn't exist for this branch, create it so inventory can be tracked.
+                $stmtIns = $pdo->prepare("INSERT INTO volume_capacity (region_id, branch_id, warehouse_capacity, inventory) VALUES (?, ?, ?, ?)");
+                $stmtIns->execute([(int)$region_id, $branch_id, 0, (float)$volume]);
+                $new_inventory = (float)$volume;
+                $warehouse_capacity = 0.0;
+            }
+
+            $available_volume = max(0, $warehouse_capacity - $new_inventory);
+            $pdo->commit();
+
+            echo json_encode([
+                'success' => true,
+                'appointment_id' => $appointment_id,
+                'reference_number' => $reference_number,
+                'status' => 'completed',
+                'mode' => 'walk-in',
+                'inventory' => $new_inventory,
+                'warehouse_capacity' => $warehouse_capacity,
+                'available_volume' => $available_volume
+            ]);
+        } catch (PDOException $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            http_response_code(500);
+            echo json_encode(['success' => false, 'error' => 'Failed to create walk-in appointment']);
+        }
+        break;
+
     // --- Notification Read/Unread Handler (POST) ---
+
+    // --- My Profile / Settings (User) ---
+    case 'updateMyProfile':
+        if (!isset($_SESSION['loggedin'])) {
+            http_response_code(401);
+            echo json_encode(['success' => false, 'error' => 'Unauthorized']);
+            break;
+        }
+
+        $user_id = (int)($_SESSION['user_id'] ?? $_SESSION['id'] ?? 0);
+        if ($user_id <= 0) {
+            http_response_code(401);
+            echo json_encode(['success' => false, 'error' => 'Unauthorized']);
+            break;
+        }
+
+        $data = json_decode(file_get_contents('php://input'), true);
+        if (!is_array($data)) $data = [];
+
+        $first_name = trim((string)sanitize_input($data['first_name'] ?? ''));
+        $middle_name = trim((string)sanitize_input($data['middle_name'] ?? ''));
+        $last_name = trim((string)sanitize_input($data['last_name'] ?? ''));
+        $suffix = trim((string)sanitize_input($data['suffix'] ?? ''));
+        $email_address = trim((string)sanitize_input($data['email_address'] ?? ''));
+        $contact_number = trim((string)sanitize_input($data['contact_number'] ?? ''));
+        $gender = strtolower(trim((string)sanitize_input($data['gender'] ?? '')));
+
+        if ($first_name === '' || $middle_name === '' || $last_name === '' || $email_address === '' || $contact_number === '' || $gender === '') {
+            http_response_code(400);
+            echo json_encode(['success' => false, 'error' => 'Please complete all required fields.']);
+            break;
+        }
+
+        if (!filter_var($email_address, FILTER_VALIDATE_EMAIL)) {
+            http_response_code(400);
+            echo json_encode(['success' => false, 'error' => 'Invalid email.']);
+            break;
+        }
+
+        if (!in_array($gender, ['male', 'female', 'other'], true)) {
+            http_response_code(400);
+            echo json_encode(['success' => false, 'error' => 'Invalid gender.']);
+            break;
+        }
+
+        // Normalize PH contact number to 09XXXXXXXXX
+        $digits = preg_replace('/\D+/', '', $contact_number);
+        if (preg_match('/^639\d{9}$/', $digits)) {
+            $digits = '0' . substr($digits, 2);
+        }
+        if (!preg_match('/^09\d{9}$/', $digits)) {
+            http_response_code(400);
+            echo json_encode(['success' => false, 'error' => 'Invalid contact number.']);
+            break;
+        }
+        $contact_number = $digits;
+
+        try {
+            $stmt = $pdo->prepare("UPDATE users SET first_name = ?, middle_name = ?, last_name = ?, suffix = ?, email_address = ?, contact_number = ?, gender = ? WHERE user_id = ?");
+            $stmt->execute([$first_name, $middle_name, $last_name, $suffix, $email_address, $contact_number, $gender, $user_id]);
+            echo json_encode(['success' => true]);
+        } catch (PDOException $e) {
+            http_response_code(500);
+            echo json_encode(['success' => false, 'error' => 'Failed to update profile.']);
+        }
+        break;
+
+    case 'changeMyPassword':
+        if (!isset($_SESSION['loggedin'])) {
+            http_response_code(401);
+            echo json_encode(['success' => false, 'error' => 'Unauthorized']);
+            break;
+        }
+
+        $user_id = (int)($_SESSION['user_id'] ?? $_SESSION['id'] ?? 0);
+        if ($user_id <= 0) {
+            http_response_code(401);
+            echo json_encode(['success' => false, 'error' => 'Unauthorized']);
+            break;
+        }
+
+        $data = json_decode(file_get_contents('php://input'), true);
+        if (!is_array($data)) $data = [];
+        $current_password = (string)($data['current_password'] ?? '');
+        $new_password = (string)($data['new_password'] ?? '');
+
+        if (trim($current_password) === '' || trim($new_password) === '') {
+            http_response_code(400);
+            echo json_encode(['success' => false, 'error' => 'Missing password fields.']);
+            break;
+        }
+        if (strlen($new_password) < 8) {
+            http_response_code(400);
+            echo json_encode(['success' => false, 'error' => 'New password must be at least 8 characters.']);
+            break;
+        }
+
+        try {
+            $stmt = $pdo->prepare('SELECT password_hash FROM users WHERE user_id = ? LIMIT 1');
+            $stmt->execute([$user_id]);
+            $hash = $stmt->fetchColumn();
+            if (!$hash || !password_verify($current_password, $hash)) {
+                http_response_code(400);
+                echo json_encode(['success' => false, 'error' => 'Current password is incorrect.']);
+                break;
+            }
+
+            $new_hash = password_hash($new_password, PASSWORD_DEFAULT);
+            $up = $pdo->prepare('UPDATE users SET password_hash = ? WHERE user_id = ?');
+            $up->execute([$new_hash, $user_id]);
+            echo json_encode(['success' => true]);
+        } catch (PDOException $e) {
+            http_response_code(500);
+            echo json_encode(['success' => false, 'error' => 'Failed to change password.']);
+        }
+        break;
     case 'updateNotification':
     $data = json_decode(file_get_contents('php://input'), true);
     $appointment_id = (int)($data['appointment_id'] ?? 0);
@@ -906,6 +1583,33 @@ switch ($action) {
         try {
             $stmt = $pdo->prepare("UPDATE appointments SET is_read = ? WHERE appointment_id = ?");
             $stmt->execute([$is_read, $appointment_id]);
+            echo json_encode(['success' => true]);
+        } catch (PDOException $e) {
+            echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+        }
+    } else {
+        echo json_encode(['success' => false, 'error' => 'Invalid ID']);
+    }
+    break;
+
+    // --- Notification Delete Handler (POST) ---
+    // Marks a notification as deleted so it no longer appears in the dropdown.
+    // Implemented as a soft delete on the appointments table (notif_deleted = 1).
+    case 'deleteNotification':
+    $data = json_decode(file_get_contents('php://input'), true);
+    $appointment_id = (int)($data['appointment_id'] ?? 0);
+
+    if ($appointment_id) {
+        try {
+            // Lazily add the column if it doesn't exist yet
+            $colStmt = $pdo->query("SHOW COLUMNS FROM appointments LIKE 'notif_deleted'");
+            $col = $colStmt ? $colStmt->fetch(PDO::FETCH_ASSOC) : false;
+            if (!$col) {
+                $pdo->exec("ALTER TABLE appointments ADD COLUMN notif_deleted TINYINT(1) NOT NULL DEFAULT 0");
+            }
+
+            $stmt = $pdo->prepare("UPDATE appointments SET notif_deleted = 1 WHERE appointment_id = ?");
+            $stmt->execute([$appointment_id]);
             echo json_encode(['success' => true]);
         } catch (PDOException $e) {
             echo json_encode(['success' => false, 'error' => $e->getMessage()]);
@@ -1556,60 +2260,13 @@ switch ($action) {
 
             // Status distribution
             $stmtStatus = $pdo->prepare(
-                "SELECT a.status, COUNT(*) AS count 
+                "SELECT a.status, COUNT(*) AS count, COALESCE(SUM(a.volume), 0) AS volume
                  FROM appointments a 
                  {$where}
                  GROUP BY a.status"
             );
             $stmtStatus->execute($params);
             $statusRows = $stmtStatus->fetchAll(PDO::FETCH_ASSOC);
-
-            // Daily series
-            $stmtDaily = $pdo->prepare(
-                "SELECT a.`date` AS day, COUNT(*) AS count, COALESCE(SUM(a.volume), 0) AS volume
-                 FROM appointments a
-                 {$where}
-                 GROUP BY a.`date`
-                 ORDER BY a.`date`"
-            );
-            $stmtDaily->execute($params);
-            $dailyRows = $stmtDaily->fetchAll(PDO::FETCH_ASSOC);
-
-            // Slot distribution
-            $stmtSlot = $pdo->prepare(
-                "SELECT UPPER(a.time_slot) AS time_slot, COUNT(*) AS count
-                 FROM appointments a
-                 {$where}
-                 GROUP BY UPPER(a.time_slot)"
-            );
-            $stmtSlot->execute($params);
-            $slotRows = $stmtSlot->fetchAll(PDO::FETCH_ASSOC);
-
-            // Farmer type distribution
-            $stmtType = $pdo->prepare(
-                "SELECT f.type_name, COUNT(*) AS count, COALESCE(SUM(a.volume), 0) AS volume
-                 FROM appointments a
-                 LEFT JOIN farmer_type f ON a.farmer_type_id = f.farmer_type_id
-                 {$where}
-                 GROUP BY f.type_name
-                 ORDER BY count DESC"
-            );
-            $stmtType->execute($params);
-            $typeRows = $stmtType->fetchAll(PDO::FETCH_ASSOC);
-
-            // Top farmers by volume
-            $stmtTop = $pdo->prepare(
-                "SELECT CONCAT(TRIM(a.first_name), ' ', TRIM(a.last_name)) AS farmer_name,
-                        COUNT(*) AS appointments,
-                        COALESCE(SUM(a.volume), 0) AS volume
-                 FROM appointments a
-                 {$where}
-                 GROUP BY TRIM(a.first_name), TRIM(a.last_name)
-                 ORDER BY volume DESC
-                 LIMIT 5"
-            );
-            $stmtTop->execute($params);
-            $topRows = $stmtTop->fetchAll(PDO::FETCH_ASSOC);
 
             echo json_encode([
                 'success' => true,
@@ -1622,11 +2279,7 @@ switch ($action) {
                         'confirmed_count' => (int)($summary['confirmed_count'] ?? 0),
                         'cancelled_count' => (int)($summary['cancelled_count'] ?? 0)
                     ],
-                    'status' => $statusRows,
-                    'daily' => $dailyRows,
-                    'slots' => $slotRows,
-                    'farmer_types' => $typeRows,
-                    'top_farmers' => $topRows
+                    'status' => $statusRows
                 ]
             ]);
         } catch (\PDOException $e) {
@@ -1741,6 +2394,259 @@ switch ($action) {
             error_log('getReportsAppointments failed: ' . $e->getMessage());
             http_response_code(500);
             echo json_encode(['success' => false, 'error' => 'Failed to load report rows.']);
+        }
+        break;
+
+    case 'getWarehouseReport':
+        // Processor-only: warehouse report (capacity snapshot + completed intake trend aligned to filter range)
+        try {
+            if (!isset($_SESSION['loggedin']) || ($_SESSION['user_type'] ?? '') !== 'Processor') {
+                http_response_code(401);
+                echo json_encode(['success' => false, 'error' => 'Unauthorized.']);
+                break;
+            }
+
+            $branch_id = (int)($_SESSION['branch_id'] ?? 0);
+            if ($branch_id <= 0) {
+                http_response_code(400);
+                echo json_encode(['success' => false, 'error' => 'Missing branch context.']);
+                break;
+            }
+
+            $start_date = (string)sanitize_input($_GET['start_date'] ?? '');
+            $end_date = (string)sanitize_input($_GET['end_date'] ?? '');
+            $time_slot = strtoupper((string)sanitize_input($_GET['time_slot'] ?? ''));
+            $farmer_type_id = (int)sanitize_input($_GET['farmer_type_id'] ?? 0);
+
+            if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $start_date) || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $end_date)) {
+                http_response_code(400);
+                echo json_encode(['success' => false, 'error' => 'Invalid date range.']);
+                break;
+            }
+
+            // Capacity snapshot
+            $stmtCap = $pdo->prepare('SELECT warehouse_capacity, inventory FROM volume_capacity WHERE branch_id = ?');
+            $stmtCap->execute([$branch_id]);
+            $cap = $stmtCap->fetch(PDO::FETCH_ASSOC) ?: ['warehouse_capacity' => 0, 'inventory' => 0];
+            $warehouse_capacity = (float)($cap['warehouse_capacity'] ?? 0);
+            $inventory = (float)($cap['inventory'] ?? 0);
+            $available = max(0, $warehouse_capacity - $inventory);
+            $percent = $warehouse_capacity > 0 ? ($inventory / $warehouse_capacity) * 100 : 0;
+
+            // Completed deliveries trend (smart granularity)
+            $params = [
+                ':branch_id' => $branch_id,
+                ':start_date' => $start_date,
+                ':end_date' => $end_date
+            ];
+
+            $where = "WHERE a.branch_id = :branch_id AND a.status = 'completed' AND a.`date` BETWEEN :start_date AND :end_date";
+            if ($time_slot === 'AM' || $time_slot === 'PM') {
+                $where .= ' AND a.time_slot = :time_slot';
+                $params[':time_slot'] = $time_slot;
+            }
+            if ($farmer_type_id > 0) {
+                $where .= ' AND a.farmer_type_id = :farmer_type_id';
+                $params[':farmer_type_id'] = $farmer_type_id;
+            }
+
+            $startTs = strtotime($start_date);
+            $endTs = strtotime($end_date);
+            if (!$startTs || !$endTs) {
+                $startTs = time();
+                $endTs = time();
+            }
+            $rangeDays = (int)floor(($endTs - $startTs) / 86400) + 1;
+
+            // Smart granularity rules (per UI spec):
+            // - Last 7 days: show Daily or Hourly points. We don't have timestamps, so we approximate "hourly"
+            //   with session-level (AM/PM) points when time_slot filter is not set.
+            // - 1 month: daily
+            // - >= 2 months: weekly totals
+            // - >= 7 months: monthly totals
+            $granularity = 'day';
+            if ($rangeDays >= 210) {
+                $granularity = 'month';
+            } elseif ($rangeDays >= 60) {
+                $granularity = 'week';
+            } elseif ($rangeDays <= 7 && !($time_slot === 'AM' || $time_slot === 'PM')) {
+                $granularity = 'session';
+            }
+
+            $trendPoints = [];
+
+            if ($granularity === 'session') {
+                $stmt = $pdo->prepare(
+                    "SELECT DATE(a.`date`) AS d, UPPER(a.time_slot) AS slot, COUNT(*) AS cnt, COALESCE(SUM(a.volume), 0) AS vol\n" .
+                    "FROM appointments a\n" .
+                    "{$where}\n" .
+                    "GROUP BY DATE(a.`date`), UPPER(a.time_slot)\n" .
+                    "ORDER BY d ASC, FIELD(UPPER(a.time_slot), 'AM', 'PM')"
+                );
+                $stmt->execute($params);
+                $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+                $map = [];
+                foreach ($rows as $r) {
+                    $d = (string)($r['d'] ?? '');
+                    $slot = strtoupper((string)($r['slot'] ?? ''));
+                    if ($d === '' || ($slot !== 'AM' && $slot !== 'PM')) continue;
+                    $map[$d . '|' . $slot] = ['count' => (int)($r['cnt'] ?? 0), 'volume' => (float)($r['vol'] ?? 0)];
+                }
+
+                $cur = new \DateTime($start_date);
+                $end = new \DateTime($end_date);
+                $slots = ['AM', 'PM'];
+                while ($cur <= $end) {
+                    $d = $cur->format('Y-m-d');
+                    foreach ($slots as $slot) {
+                        $v = $map[$d . '|' . $slot] ?? ['count' => 0, 'volume' => 0.0];
+                        $trendPoints[] = [
+                            'start_date' => $d,
+                            'end_date' => $d,
+                            'time_slot' => $slot,
+                            'count' => (int)$v['count'],
+                            'volume' => (float)$v['volume']
+                        ];
+                    }
+                    $cur->modify('+1 day');
+                }
+            } elseif ($granularity === 'day') {
+                $stmt = $pdo->prepare(
+                    "SELECT DATE(a.`date`) AS d, COUNT(*) AS cnt, COALESCE(SUM(a.volume), 0) AS vol
+                     FROM appointments a
+                     {$where}
+                     GROUP BY DATE(a.`date`)
+                     ORDER BY d ASC"
+                );
+                $stmt->execute($params);
+                $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+                $map = [];
+                foreach ($rows as $r) {
+                    $k = (string)($r['d'] ?? '');
+                    if ($k === '') continue;
+                    $map[$k] = ['count' => (int)($r['cnt'] ?? 0), 'volume' => (float)($r['vol'] ?? 0)];
+                }
+
+                $cur = new \DateTime($start_date);
+                $end = new \DateTime($end_date);
+                while ($cur <= $end) {
+                    $k = $cur->format('Y-m-d');
+                    $v = $map[$k] ?? ['count' => 0, 'volume' => 0.0];
+                    $trendPoints[] = [
+                        'start_date' => $k,
+                        'end_date' => $k,
+                        'count' => (int)$v['count'],
+                        'volume' => (float)$v['volume']
+                    ];
+                    $cur->modify('+1 day');
+                }
+            } elseif ($granularity === 'week') {
+                $stmt = $pdo->prepare(
+                    "SELECT YEARWEEK(a.`date`, 1) AS yw, COUNT(*) AS cnt, COALESCE(SUM(a.volume), 0) AS vol
+                     FROM appointments a
+                     {$where}
+                     GROUP BY yw
+                     ORDER BY yw ASC"
+                );
+                $stmt->execute($params);
+                $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+                $map = [];
+                foreach ($rows as $r) {
+                    $k = (string)($r['yw'] ?? '');
+                    if ($k === '') continue;
+                    $map[$k] = ['count' => (int)($r['cnt'] ?? 0), 'volume' => (float)($r['vol'] ?? 0)];
+                }
+
+                $cur = new \DateTime($start_date);
+                // Align buckets to ISO week (Mon-Sun)
+                $cur->modify('monday this week');
+                $rangeEnd = new \DateTime($end_date);
+
+                while ($cur <= $rangeEnd) {
+                    $bucketStart = clone $cur;
+                    $bucketEnd = clone $cur;
+                    $bucketEnd->modify('+6 days');
+
+                    $labelStart = (new \DateTime($start_date) > $bucketStart) ? new \DateTime($start_date) : $bucketStart;
+                    $labelEnd = ($rangeEnd < $bucketEnd) ? clone $rangeEnd : $bucketEnd;
+
+                    $isoYear = (int)$bucketStart->format('o');
+                    $isoWeek = (int)$bucketStart->format('W');
+                    $key = (string)(($isoYear * 100) + $isoWeek);
+
+                    $v = $map[$key] ?? ['count' => 0, 'volume' => 0.0];
+                    $trendPoints[] = [
+                        'start_date' => $labelStart->format('Y-m-d'),
+                        'end_date' => $labelEnd->format('Y-m-d'),
+                        'count' => (int)$v['count'],
+                        'volume' => (float)$v['volume']
+                    ];
+
+                    $cur->modify('+7 days');
+                }
+            } else { // month
+                $stmt = $pdo->prepare(
+                    "SELECT DATE_FORMAT(a.`date`, '%Y-%m') AS ym, COUNT(*) AS cnt, COALESCE(SUM(a.volume), 0) AS vol
+                     FROM appointments a
+                     {$where}
+                     GROUP BY ym
+                     ORDER BY ym ASC"
+                );
+                $stmt->execute($params);
+                $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+                $map = [];
+                foreach ($rows as $r) {
+                    $k = (string)($r['ym'] ?? '');
+                    if ($k === '') continue;
+                    $map[$k] = ['count' => (int)($r['cnt'] ?? 0), 'volume' => (float)($r['vol'] ?? 0)];
+                }
+
+                $cur = new \DateTime(date('Y-m-01', $startTs));
+                $endMonth = new \DateTime(date('Y-m-01', $endTs));
+                while ($cur <= $endMonth) {
+                    $k = $cur->format('Y-m');
+                    $v = $map[$k] ?? ['count' => 0, 'volume' => 0.0];
+
+                    $startOfMonth = clone $cur;
+                    $endOfMonth = clone $cur;
+                    $endOfMonth->modify('last day of this month');
+
+                    $labelStart = (new \DateTime($start_date) > $startOfMonth) ? new \DateTime($start_date) : $startOfMonth;
+                    $labelEnd = ((new \DateTime($end_date)) < $endOfMonth) ? new \DateTime($end_date) : $endOfMonth;
+
+                    $trendPoints[] = [
+                        'start_date' => $labelStart->format('Y-m-d'),
+                        'end_date' => $labelEnd->format('Y-m-d'),
+                        'count' => (int)$v['count'],
+                        'volume' => (float)$v['volume']
+                    ];
+                    $cur->modify('+1 month');
+                }
+            }
+
+            echo json_encode([
+                'success' => true,
+                'data' => [
+                    'capacity' => [
+                        'warehouse_capacity' => $warehouse_capacity,
+                        'inventory' => $inventory,
+                        'available' => $available,
+                        'percent' => $percent
+                    ],
+                    'trend' => [
+                        'granularity' => $granularity,
+                        'points' => $trendPoints
+                    ]
+                ]
+            ]);
+        } catch (\PDOException $e) {
+            error_log('getWarehouseReport failed: ' . $e->getMessage());
+            http_response_code(500);
+            echo json_encode(['success' => false, 'error' => 'Failed to load warehouse report.']);
         }
         break;
 

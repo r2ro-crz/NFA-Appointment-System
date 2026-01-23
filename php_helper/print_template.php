@@ -10,6 +10,27 @@ function nfa_file_exists_rel(string $relPath): bool {
     return is_file($abs);
 }
 
+function nfa_abs_path_rel(string $relPath): string {
+    $relPath = ltrim(str_replace(['\\', '//'], '/', $relPath), '/');
+    return dirname(__DIR__) . '/' . $relPath;
+}
+
+function nfa_asset_data_uri(string $relPath): string {
+    $abs = nfa_abs_path_rel($relPath);
+    if (!is_file($abs)) return '';
+
+    $ext = strtolower(pathinfo($abs, PATHINFO_EXTENSION));
+    $mime = 'application/octet-stream';
+    if ($ext === 'png') $mime = 'image/png';
+    elseif ($ext === 'jpg' || $ext === 'jpeg') $mime = 'image/jpeg';
+    elseif ($ext === 'gif') $mime = 'image/gif';
+    elseif ($ext === 'svg') $mime = 'image/svg+xml';
+
+    $bytes = @file_get_contents($abs);
+    if ($bytes === false) return '';
+    return 'data:' . $mime . ';base64,' . base64_encode($bytes);
+}
+
 function nfa_branch_context(PDO $pdo, int $branch_id): ?array {
     if ($branch_id <= 0) return null;
 
@@ -25,14 +46,16 @@ function nfa_branch_context(PDO $pdo, int $branch_id): ?array {
     return $row ?: null;
 }
 
-function nfa_optional_logo_img(string $src, string $alt, string $class = 'hdr-logo'): string {
+function nfa_optional_logo_img(string $src, string $alt, string $class = 'hdr-logo', bool $embedAssets = false): string {
     if (!nfa_file_exists_rel($src)) return '';
-    return '<img class="' . nfa_escape($class) . '" src="' . nfa_escape($src) . '" alt="' . nfa_escape($alt) . '">';
+    $imgSrc = $embedAssets ? nfa_asset_data_uri($src) : $src;
+    if ($imgSrc === '') return '';
+    return '<img class="' . nfa_escape($class) . '" src="' . nfa_escape($imgSrc) . '" alt="' . nfa_escape($alt) . '">';
 }
 
-function nfa_first_existing_logo(array $candidates, string $alt, string $class = 'hdr-logo'): string {
+function nfa_first_existing_logo(array $candidates, string $alt, string $class = 'hdr-logo', bool $embedAssets = false): string {
     foreach ($candidates as $src) {
-        $img = nfa_optional_logo_img((string)$src, $alt, $class);
+        $img = nfa_optional_logo_img((string)$src, $alt, $class, $embedAssets);
         if ($img !== '') return $img;
     }
     return '';
@@ -41,6 +64,7 @@ function nfa_first_existing_logo(array $candidates, string $alt, string $class =
 function nfa_print_header(string $title, ?array $branchCtx = null, array $opts = []): void {
     $subtitle = (string)($opts['subtitle'] ?? 'National Food Authority');
     $hideDocTitle = (bool)($opts['hide_doc_title'] ?? false);
+    $embedAssets = (bool)($opts['embed_assets'] ?? false);
 
     $branchLine = '';
     if ($branchCtx) {
@@ -59,17 +83,19 @@ function nfa_print_header(string $title, ?array $branchCtx = null, array $opts =
     }
 
     $leftLogos =
-        nfa_first_existing_logo(['img/da-logo.png', 'img/da-logo.jpg', 'img/da-logo.jpeg'], 'DA Logo') .
-        nfa_first_existing_logo(['img/nfa-logo.png', 'img/nfa-logo.jpg', 'img/nfa-logo.jpeg'], 'NFA Logo');
+        nfa_first_existing_logo(['img/da-logo.png', 'img/da-logo.jpg', 'img/da-logo.jpeg'], 'DA Logo', 'hdr-logo', $embedAssets) .
+        nfa_first_existing_logo(['img/nfa-logo.png', 'img/nfa-logo.jpg', 'img/nfa-logo.jpeg'], 'NFA Logo', 'hdr-logo', $embedAssets);
 
     if (trim($leftLogos) === '') {
-        $leftLogos = '<img class="hdr-logo" src="img/nfa-logo.png" alt="NFA Logo">';
+        $leftLogos = nfa_first_existing_logo(['img/nfa-logo.png', 'img/nfa-logo.jpg', 'img/nfa-logo.jpeg'], 'NFA Logo', 'hdr-logo', $embedAssets);
     }
 
     // User-provided BP logo can be bp-logo.jpg/jpeg.
     $rightLogo = nfa_first_existing_logo(
         ['img/bp-logo.jpeg', 'img/bp-logo.jpg', 'img/bagong-pilipinas.png', 'img/bagong-pilipinas.jpg', 'img/bagong-pilipinas.jpeg'],
-        'Bagong Pilipinas'
+        'Bagong Pilipinas',
+        'hdr-logo',
+        $embedAssets
     );
 
     echo '<div class="print-header">';

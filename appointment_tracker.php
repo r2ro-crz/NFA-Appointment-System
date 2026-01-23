@@ -102,6 +102,12 @@ $prefillEmail = isset($_GET['email']) ? (string)$_GET['email'] : '';
                             <p class="sub">Reference: <span class="mono" id="refValue">—</span></p>
                         </div>
                         <div class="results-actions">
+                            <button class="tracker-btn tracker-btn-primary" type="button" id="confirmRescheduledBtn" style="display:none;">
+                                <i class="fas fa-circle-check"></i> Confirm
+                            </button>
+                            <button class="tracker-btn tracker-btn-danger" type="button" id="cancelAppointmentBtn" style="display:none;">
+                                <i class="fas fa-ban"></i> Cancel
+                            </button>
                             <button class="tracker-btn tracker-btn-ghost" type="button" id="copyRefBtn">
                                 <i class="fas fa-copy"></i> Copy Reference
                             </button>
@@ -177,8 +183,88 @@ $prefillEmail = isset($_GET['email']) ? (string)$_GET['email'] : '';
         </div>
     </main>
 
+    <!-- Cancel modal -->
+    <div class="tracker-modal-overlay" id="cancelModal" style="display:none;" aria-hidden="true">
+        <div class="tracker-modal" role="dialog" aria-modal="true" aria-labelledby="cancelTitle">
+            <div class="tracker-modal-header">
+                <h3 id="cancelTitle">Cancel Appointment</h3>
+                <button type="button" class="tracker-modal-close" id="cancelModalClose" aria-label="Close">
+                    <i class="fas fa-xmark"></i>
+                </button>
+            </div>
+
+            <form id="cancelForm" novalidate>
+                <div class="tracker-modal-body">
+                    <p class="tracker-modal-lead">Please select a reason for cancellation. This helps us improve the service.</p>
+
+                    <fieldset class="tracker-fieldset">
+                        <legend>Reason (required)</legend>
+                        <label class="tracker-radio">
+                            <input type="radio" name="cancel_reason" value="schedule_conflict" required>
+                            <span>Schedule conflict</span>
+                        </label>
+                        <label class="tracker-radio">
+                            <input type="radio" name="cancel_reason" value="no_longer_available" required>
+                            <span>No longer available to deliver</span>
+                        </label>
+                        <label class="tracker-radio">
+                            <input type="radio" name="cancel_reason" value="wrong_details" required>
+                            <span>Wrong details / need to rebook</span>
+                        </label>
+                        <label class="tracker-radio">
+                            <input type="radio" name="cancel_reason" value="other" required>
+                            <span>Other</span>
+                        </label>
+                    </fieldset>
+
+                    <div class="field" style="margin-top:0.9rem;">
+                        <label for="cancelDetails">Details (optional)</label>
+                        <textarea id="cancelDetails" class="tracker-textarea" rows="4" placeholder="Add details (optional)…"></textarea>
+                        <div class="field-help" id="cancelDetailsHelp">If you choose “Other”, details are required.</div>
+                    </div>
+
+                    <div class="tracker-alert" id="cancelFormAlert" style="display:none;" role="status" aria-live="polite"></div>
+                </div>
+
+                <div class="tracker-modal-footer">
+                    <button type="button" class="tracker-btn tracker-btn-secondary" id="cancelModalBack">
+                        <i class="fas fa-arrow-left"></i> Back
+                    </button>
+                    <button type="submit" class="tracker-btn tracker-btn-danger" id="cancelSubmitBtn">
+                        <i class="fas fa-ban"></i> Continue
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Confirmation modal (used for cancel + confirm) -->
+    <div class="tracker-modal-overlay" id="confirmModal" style="display:none;" aria-hidden="true">
+        <div class="tracker-modal" role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
+            <div class="tracker-modal-header">
+                <h3 id="confirmTitle">Please Confirm</h3>
+                <button type="button" class="tracker-modal-close" id="confirmModalClose" aria-label="Close">
+                    <i class="fas fa-xmark"></i>
+                </button>
+            </div>
+            <div class="tracker-modal-body">
+                <p class="tracker-modal-lead" id="confirmMessage">—</p>
+                <div class="tracker-confirm-meta" id="confirmMeta" style="display:none;"></div>
+                <div class="tracker-alert" id="confirmModalAlert" style="display:none;" role="status" aria-live="polite"></div>
+            </div>
+            <div class="tracker-modal-footer">
+                <button type="button" class="tracker-btn tracker-btn-secondary" id="confirmCancelBtn">
+                    <i class="fas fa-xmark"></i> No
+                </button>
+                <button type="button" class="tracker-btn tracker-btn-primary" id="confirmOkBtn">
+                    <i class="fas fa-check"></i> Yes
+                </button>
+            </div>
+        </div>
+    </div>
+
     <script src="js/clear_inputs.js"></script>
     <script src="js/loading_ui.js?v=<?php echo urlencode((string)@filemtime(__DIR__ . '/js/loading_ui.js')); ?>"></script>
-    <script src="js/appointment_tracker.js"></script>
+    <script src="js/appointment_tracker.js?v=<?php echo urlencode((string)@filemtime(__DIR__ . '/js/appointment_tracker.js')); ?>"></script>
 </body>
 </html>

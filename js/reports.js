@@ -21,6 +21,159 @@
 
     const clamp = (n, min, max) => Math.max(min, Math.min(max, n));
 
+    const NFAValueLabelsPlugin = {
+        id: 'nfaValueLabels',
+        afterDatasetsDraw: (chart, _args, opts) => {
+            const type = String(opts?.type || '').toLowerCase();
+            if (!type) return;
+
+            const ctx = chart?.ctx;
+            if (!ctx) return;
+
+            const drawText = (text, x, y, {
+                font = '700 10px Arial',
+                fill = '#0f172a',
+                bg = 'rgba(255,255,255,0.92)',
+                padX = 4,
+                padY = 2,
+                bounds = null
+            } = {}) => {
+                if (!text) return;
+                ctx.save();
+                ctx.font = font;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+
+                const metrics = ctx.measureText(text);
+                const w = Math.ceil(metrics.width) + padX * 2;
+                const h = 14 + padY * 2;
+                let rx = x - w / 2;
+                let ry = y - h / 2;
+
+                // Keep the label inside the visible plot area to avoid being clipped.
+                if (bounds && Number.isFinite(bounds.left) && Number.isFinite(bounds.top) && Number.isFinite(bounds.right) && Number.isFinite(bounds.bottom)) {
+                    const minX = bounds.left + 2;
+                    const maxX = bounds.right - w - 2;
+                    const minY = bounds.top + 2;
+                    const maxY = bounds.bottom - h - 2;
+                    rx = clamp(rx, minX, maxX);
+                    ry = clamp(ry, minY, maxY);
+                    x = rx + w / 2;
+                    y = ry + h / 2;
+                }
+
+                // background pill
+                ctx.fillStyle = bg;
+                const r = 4;
+                ctx.beginPath();
+                ctx.moveTo(rx + r, ry);
+                ctx.lineTo(rx + w - r, ry);
+                ctx.quadraticCurveTo(rx + w, ry, rx + w, ry + r);
+                ctx.lineTo(rx + w, ry + h - r);
+                ctx.quadraticCurveTo(rx + w, ry + h, rx + w - r, ry + h);
+                ctx.lineTo(rx + r, ry + h);
+                ctx.quadraticCurveTo(rx, ry + h, rx, ry + h - r);
+                ctx.lineTo(rx, ry + r);
+                ctx.quadraticCurveTo(rx, ry, rx + r, ry);
+                ctx.closePath();
+                ctx.fill();
+
+                ctx.fillStyle = fill;
+                ctx.fillText(text, x, y);
+                ctx.restore();
+            };
+
+            if (type === 'line') {
+                const datasetIndex = Number.isFinite(opts?.datasetIndex) ? opts.datasetIndex : 0;
+                const dataset = chart.data?.datasets?.[datasetIndex];
+                const data = Array.isArray(dataset?.data) ? dataset.data : [];
+                const meta = chart.getDatasetMeta(datasetIndex);
+                const elems = meta?.data || [];
+                const n = Math.min(data.length, elems.length);
+
+                const gran = String(opts?.granularity || '').toLowerCase();
+                const maxLabels = Number.isFinite(opts?.maxLabels) ? opts.maxLabels : 24;
+
+                const nonZeroIdx = [];
+                for (let i = 0; i < n; i++) {
+                    const v = Number(data[i] || 0);
+                    if (Number.isFinite(v) && v > 0) nonZeroIdx.push(i);
+                }
+
+                if (nonZeroIdx.length === 0) return;
+
+                const shouldLabelIndex = (i) => {
+                    // Always label values > 0. If too many non-zero points, thin them out.
+                    if (nonZeroIdx.length <= maxLabels) return true;
+
+                    // If very active series, downsample labels.
+                    // Keep first, last, and then every other non-zero point.
+                    const pos = nonZeroIdx.indexOf(i);
+                    if (pos < 0) return false;
+                    const lastPos = nonZeroIdx.length - 1;
+                    if (pos === 0 || pos === lastPos) return true;
+                    return (pos % 2) === 0;
+                };
+
+                for (let i = 0; i < n; i++) {
+                    const v = Number(data[i] || 0);
+                    if (!Number.isFinite(v) || v <= 0) continue; // user request: label only > 0
+                    if (!shouldLabelIndex(i)) continue;
+
+                    const el = elems[i];
+                    const x = el?.x;
+                    const y = el?.y;
+                    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+
+                    drawText((opts?.formatter ? opts.formatter(v) : String(v)), x, y - 14, {
+                        font: opts?.font || '700 10px Arial',
+                        bounds: chart.chartArea
+                    });
+                }
+                return;
+            }
+
+            if (type === 'doughnut' || type === 'pie') {
+                const datasetIndex = Number.isFinite(opts?.datasetIndex) ? opts.datasetIndex : 0;
+                const dataset = chart.data?.datasets?.[datasetIndex];
+                const data = Array.isArray(dataset?.data) ? dataset.data : [];
+                const meta = chart.getDatasetMeta(datasetIndex);
+                const arcs = meta?.data || [];
+                const n = Math.min(data.length, arcs.length);
+                const total = Number(opts?.total || data.reduce((a, b) => a + Number(b || 0), 0));
+
+                for (let i = 0; i < n; i++) {
+                    const v = Number(data[i] || 0);
+                    if (!Number.isFinite(v) || v <= 0) continue;
+
+                    const arc = arcs[i];
+                    const sa = arc?.startAngle;
+                    const ea = arc?.endAngle;
+                    const ox = arc?.x;
+                    const oy = arc?.y;
+                    const or = arc?.outerRadius;
+                    const ir = arc?.innerRadius;
+                    if (![sa, ea, ox, oy, or].every(Number.isFinite)) continue;
+                    const inner = Number.isFinite(ir) ? ir : (or * 0.55);
+                    const r = inner + (or - inner) * 0.62; // inside the slice
+
+                    const ang = (sa + ea) / 2;
+                    const x = ox + Math.cos(ang) * r;
+                    const y = oy + Math.sin(ang) * r;
+                    const pct = total > 0 ? (v / total) * 100 : 0;
+                    const text = (opts?.formatter)
+                        ? opts.formatter(v, pct)
+                        : `${fmt(v)} (${fmt(pct, { decimals: 1 })}%)`;
+
+                    drawText(text, x, y, {
+                        font: opts?.font || '700 10px Arial',
+                        bounds: chart.chartArea
+                    });
+                }
+            }
+        }
+    };
+
     const animateNumber = (el, to, { from, durationMs = (SIMPLE_MODE ? 0 : 650), decimals = 0 } = {}) => {
         if (!el) return;
         const start = Number.isFinite(from) ? from : (parseFloat(String(el.textContent).replace(/,/g, '')) || 0);
@@ -86,13 +239,25 @@
     };
 
     const state = {
+        mode: 'appointments',
         // Charts removed on Reports for performance.
         table: {
             page: 1,
-            pageSize: 25,
+            pageSize: 10,
             total: 0,
             lastFilters: null
+        },
+        warehouse: {
+            data: null
         }
+    };
+
+    const debounce = (fn, waitMs = 250) => {
+        let t;
+        return (...args) => {
+            if (t) clearTimeout(t);
+            t = setTimeout(() => fn(...args), waitMs);
+        };
     };
 
     const escapeHtml = (s) => String(s ?? '')
@@ -117,199 +282,45 @@
     };
 
     const renderKpis = (summary, statusRows) => {
-        const total = Number(summary.total_appointments || 0);
+        const totalCount = Number(summary.total_appointments || 0);
         const totalVol = Number(summary.total_volume || 0);
-        const completed = Number(summary.completed_count || 0);
 
-        const pendingRow = (statusRows || []).find(r => String(r.status).toLowerCase() === 'pending');
-        const pending = pendingRow ? Number(pendingRow.count || 0) : 0;
+        const map = new Map(
+            (statusRows || []).map(r => {
+                const k = String(r.status || '').toLowerCase();
+                return [k, { count: Number(r.count || 0) || 0, volume: Number(r.volume || 0) || 0 }];
+            })
+        );
+        const get = (k) => map.get(k) || { count: 0, volume: 0 };
 
-        animateNumber($('#kpiTotal'), total, { from: 0, decimals: 0 });
-        animateNumber($('#kpiVolume'), totalVol, { from: 0, decimals: 0 });
-        animateNumber($('#kpiCompleted'), completed, { from: 0, decimals: 0 });
-        animateNumber($('#kpiPending'), pending, { from: 0, decimals: 0 });
+        const completed = get('completed');
+        const confirmed = get('confirmed');
+        const rescheduled = get('rescheduled');
+        const pending = get('pending');
+        const cancelled = get('cancelled');
 
-        const completionRate = total > 0 ? (completed / total) * 100 : 0;
+        animateNumber($('#kpiTotalCount'), totalCount, { from: 0, decimals: 0 });
+        animateNumber($('#kpiTotalBags'), totalVol, { from: 0, decimals: 0 });
+
+        animateNumber($('#kpiCompletedCount'), completed.count, { from: 0, decimals: 0 });
+        animateNumber($('#kpiCompletedBags'), completed.volume, { from: 0, decimals: 0 });
+
+        animateNumber($('#kpiConfirmedCount'), confirmed.count, { from: 0, decimals: 0 });
+        animateNumber($('#kpiConfirmedBags'), confirmed.volume, { from: 0, decimals: 0 });
+
+        animateNumber($('#kpiRescheduledCount'), rescheduled.count, { from: 0, decimals: 0 });
+        animateNumber($('#kpiRescheduledBags'), rescheduled.volume, { from: 0, decimals: 0 });
+
+        animateNumber($('#kpiPendingCount'), pending.count, { from: 0, decimals: 0 });
+        animateNumber($('#kpiPendingBags'), pending.volume, { from: 0, decimals: 0 });
+
+        animateNumber($('#kpiCancelledCount'), cancelled.count, { from: 0, decimals: 0 });
+        animateNumber($('#kpiCancelledBags'), cancelled.volume, { from: 0, decimals: 0 });
+
+        const completionRate = totalCount > 0 ? (completed.count / totalCount) * 100 : 0;
         const avgVol = Number(summary.avg_volume || 0);
         $('#miniCompletion').textContent = `${fmt(completionRate, { decimals: 1 })}%`;
         $('#miniAvgVol').textContent = fmt(avgVol, { decimals: 0 });
-    };
-
-    const palette = {
-        status: {
-            pending: '#f39c12',
-            confirmed: '#3498db',
-            rescheduled: '#9b59b6',
-            completed: '#2ecc71',
-            cancelled: '#e74c3c'
-        },
-        slot: {
-            AM: '#3498db',
-            PM: '#9b59b6'
-        }
-    };
-
-    const renderSimple = (data) => {
-        const dailyEl = $('#vizDaily');
-        const statusEl = $('#vizStatus');
-        const slotEl = $('#vizSlot');
-        const typeEl = $('#vizType');
-        const topEl = $('#vizTop');
-
-        const setEmpty = (el, msg) => {
-            if (!el) return;
-            el.innerHTML = `<div class="simple-empty">${escapeHtml(msg)}</div>`;
-        };
-
-        // Daily
-        const daily = Array.isArray(data.daily) ? data.daily : [];
-        if (!dailyEl) {
-            // ignore
-        } else if (daily.length === 0) {
-            setEmpty(dailyEl, 'No daily data for this range.');
-        } else {
-            const counts = daily.map(r => Number(r.count || 0)).filter(Number.isFinite);
-            const max = Math.max(1, ...counts);
-            dailyEl.innerHTML = daily.slice(0, 60).map((r) => {
-                const day = escapeHtml(r.day);
-                const count = Number(r.count || 0);
-                const vol = Number(r.volume || 0);
-                const ratio = count / max;
-                return `
-                    <div class="simple-row">
-                        <div>
-                            <div class="simple-label">${day}</div>
-                            <div class="simple-sub">${fmt(vol)} bags</div>
-                        </div>
-                        <div class="bar"><span style="width:${clamp(Math.round(ratio * 100), 0, 100)}%"></span></div>
-                        <div class="simple-value">${fmt(count)} appt</div>
-                    </div>
-                `;
-            }).join('');
-        }
-
-        // Status
-        const status = Array.isArray(data.status) ? data.status : [];
-        if (!statusEl) {
-            // ignore
-        } else if (status.length === 0) {
-            setEmpty(statusEl, 'No status data.');
-        } else {
-            const total = status.reduce((sum, r) => sum + (Number(r.count || 0) || 0), 0) || 1;
-            const max = Math.max(1, ...status.map(r => Number(r.count || 0)).filter(Number.isFinite));
-            const colorClass = (s) => {
-                const k = String(s || '').toLowerCase();
-                if (k === 'completed') return 'green';
-                if (k === 'confirmed') return 'blue';
-                if (k === 'rescheduled') return 'purple';
-                if (k === 'pending') return 'orange';
-                if (k === 'cancelled') return 'red';
-                return '';
-            };
-            statusEl.innerHTML = status
-                .slice()
-                .sort((a, b) => (Number(b.count || 0) || 0) - (Number(a.count || 0) || 0))
-                .map((r) => {
-                    const s = String(r.status || 'unknown');
-                    const count = Number(r.count || 0) || 0;
-                    const pct = (count / total) * 100;
-                    const ratio = count / max;
-                    const cls = colorClass(s);
-                    return `
-                        <div class="simple-row">
-                            <div>
-                                <div class="simple-label">${escapeHtml(s.charAt(0).toUpperCase() + s.slice(1))}</div>
-                                <div class="simple-sub">${fmt(pct, { decimals: 1 })}%</div>
-                            </div>
-                            <div class="bar ${cls}"><span style="width:${clamp(Math.round(ratio * 100), 0, 100)}%"></span></div>
-                            <div class="simple-value">${fmt(count)}</div>
-                        </div>
-                    `;
-                }).join('');
-        }
-
-        // Slot
-        const slots = Array.isArray(data.slots) ? data.slots : [];
-        if (!slotEl) {
-            // ignore
-        } else if (slots.length === 0) {
-            setEmpty(slotEl, 'No time slot data.');
-        } else {
-            const max = Math.max(1, ...slots.map(r => Number(r.count || 0)).filter(Number.isFinite));
-            slotEl.innerHTML = slots
-                .slice()
-                .sort((a, b) => String(a.time_slot).localeCompare(String(b.time_slot)))
-                .map((r) => {
-                    const slot = String(r.time_slot || '').toUpperCase();
-                    const count = Number(r.count || 0) || 0;
-                    const ratio = count / max;
-                    const cls = slot === 'PM' ? 'purple' : 'blue';
-                    return `
-                        <div class="simple-row">
-                            <div class="simple-label">${escapeHtml(slot || '—')}</div>
-                            <div class="bar ${cls}"><span style="width:${clamp(Math.round(ratio * 100), 0, 100)}%"></span></div>
-                            <div class="simple-value">${fmt(count)}</div>
-                        </div>
-                    `;
-                }).join('');
-        }
-
-        // Farmer type
-        const types = Array.isArray(data.farmer_types) ? data.farmer_types : [];
-        if (!typeEl) {
-            // ignore
-        } else if (types.length === 0) {
-            setEmpty(typeEl, 'No farmer type data.');
-        } else {
-            const max = Math.max(1, ...types.map(r => Number(r.count || 0)).filter(Number.isFinite));
-            typeEl.innerHTML = types
-                .slice()
-                .sort((a, b) => (Number(b.count || 0) || 0) - (Number(a.count || 0) || 0))
-                .map((r) => {
-                    const name = String(r.type_name || 'Unknown');
-                    const count = Number(r.count || 0) || 0;
-                    const vol = Number(r.volume || 0) || 0;
-                    const ratio = count / max;
-                    return `
-                        <div class="simple-row">
-                            <div>
-                                <div class="simple-label">${escapeHtml(name)}</div>
-                                <div class="simple-sub">${fmt(vol)} bags</div>
-                            </div>
-                            <div class="bar purple"><span style="width:${clamp(Math.round(ratio * 100), 0, 100)}%"></span></div>
-                            <div class="simple-value">${fmt(count)}</div>
-                        </div>
-                    `;
-                }).join('');
-        }
-
-        // Top farmers
-        const top = Array.isArray(data.top_farmers) ? data.top_farmers : [];
-        if (!topEl) {
-            // ignore
-        } else if (top.length === 0) {
-            setEmpty(topEl, 'No top farmers for this range.');
-        } else {
-            const max = Math.max(1, ...top.map(r => Number(r.volume || 0)).filter(Number.isFinite));
-            topEl.innerHTML = top
-                .slice(0, 10)
-                .map((r) => {
-                    const name = String(r.farmer_name || 'Unknown');
-                    const vol = Number(r.volume || 0) || 0;
-                    const appts = Number(r.appointments || 0) || 0;
-                    const ratio = vol / max;
-                    return `
-                        <div class="simple-row">
-                            <div>
-                                <div class="simple-label">${escapeHtml(name)}</div>
-                                <div class="simple-sub">${fmt(appts)} appt</div>
-                            </div>
-                            <div class="bar green"><span style="width:${clamp(Math.round(ratio * 100), 0, 100)}%"></span></div>
-                            <div class="simple-value">${fmt(vol)} bags</div>
-                        </div>
-                    `;
-                }).join('');
-        }
     };
 
     const renderTable = (rows) => {
@@ -370,6 +381,269 @@
         return json.data;
     };
 
+    const fetchWarehouseReport = async (filters) => {
+        const q = buildQuery(filters);
+        const res = await fetch(`php_helper/api.php?action=getWarehouseReport&${q.toString()}`);
+        const json = await res.json();
+        if (!json || !json.success) throw new Error((json && json.error) ? json.error : 'Failed to load warehouse report.');
+        return json.data;
+    };
+
+    let warehouseStatusChart = null;
+    let warehouseTrendChart = null;
+
+    const setModeButtonState = (mode) => {
+        const a = $('#btnModeAppointments');
+        const w = $('#btnModeWarehouse');
+        if (a) a.classList.toggle('is-active', mode === 'appointments');
+        if (w) w.classList.toggle('is-active', mode === 'warehouse');
+
+        if (a && w) {
+            a.classList.toggle('btn-inline-primary', mode === 'appointments');
+            a.classList.toggle('btn-inline-secondary', mode !== 'appointments');
+            w.classList.toggle('btn-inline-primary', mode === 'warehouse');
+            w.classList.toggle('btn-inline-secondary', mode !== 'warehouse');
+        }
+
+        const aWrap = $('#appointmentReport');
+        const wWrap = $('#warehouseReport');
+        if (aWrap) aWrap.hidden = mode !== 'appointments';
+        if (wWrap) wWrap.hidden = mode !== 'warehouse';
+
+        const printBtn = $('#btnPrintReport');
+        if (printBtn) {
+            printBtn.disabled = false;
+            printBtn.title = (mode === 'warehouse') ? 'Print warehouse charts report.' : 'Print appointment report.';
+        }
+
+        const mini = $('#appointmentMiniMetrics');
+        if (mini) mini.hidden = mode !== 'appointments';
+
+        const note = $('#warehouseOnlyNote');
+        if (note) note.hidden = mode !== 'warehouse';
+
+        const chips = document.querySelectorAll('#statusChips input[type="checkbox"]');
+        chips.forEach(cb => {
+            cb.disabled = mode === 'warehouse';
+        });
+    };
+
+    const renderWarehouseCapacity = (cap) => {
+        const total = Number(cap.warehouse_capacity || 0);
+        const inventory = Number(cap.inventory || 0);
+        const available = Number(cap.available || 0);
+        const percent = Number(cap.percent || 0);
+
+        const metrics = $('#warehouseCapacityMetrics');
+        if (metrics) {
+            metrics.innerHTML = `
+                <span><strong>${fmt(inventory)}</strong> inventory</span>
+                <span><strong>${fmt(available)}</strong> available</span>
+                <span><strong>${fmt(total)}</strong> capacity</span>
+                <span class="muted">${fmt(percent, { decimals: 1 })}% full</span>
+            `;
+        }
+
+        const canvas = $('#warehouseStatusChart');
+        if (!canvas || typeof Chart === 'undefined') return;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+
+        if (warehouseStatusChart) {
+            try { warehouseStatusChart.destroy(); } catch { /* ignore */ }
+            warehouseStatusChart = null;
+        }
+
+        warehouseStatusChart = new Chart(ctx, {
+            plugins: [NFAValueLabelsPlugin],
+            type: 'doughnut',
+            data: {
+                labels: ['Current Inventory', 'Available Capacity'],
+                datasets: [{
+                    data: [inventory, Math.max(0, total - inventory)],
+                    backgroundColor: ['#3b82f6', '#10b981'],
+                    borderColor: '#fff',
+                    borderWidth: 2,
+                    cutout: '62%'
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: false },
+                    nfaValueLabels: {
+                        type: 'doughnut',
+                        datasetIndex: 0,
+                        total,
+                        font: '700 10px Arial',
+                        formatter: (value, pct) => `${fmt(value)} (${fmt(pct, { decimals: 1 })}%)`
+                    },
+                    tooltip: {
+                        callbacks: {
+                            label: (context) => {
+                                const v = Number(context.raw || 0);
+                                const pct = total > 0 ? (v / total) * 100 : 0;
+                                return `${fmt(v)} bags (${fmt(pct, { decimals: 1 })}%)`;
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    };
+
+    const parseYmd = (ymd) => {
+        const m = /^\s*(\d{4})-(\d{2})-(\d{2})\s*$/.exec(String(ymd || ''));
+        if (!m) return null;
+        const y = parseInt(m[1], 10);
+        const mo = parseInt(m[2], 10);
+        const d = parseInt(m[3], 10);
+        return new Date(y, mo - 1, d);
+    };
+
+    const fmtDateShort = (ymd) => {
+        const d = parseYmd(ymd);
+        if (!d) return String(ymd || '');
+        return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    };
+
+    const fmtMonth = (ymd) => {
+        const d = parseYmd(ymd);
+        if (!d) return String(ymd || '');
+        return d.toLocaleDateString(undefined, { month: 'short', year: 'numeric' });
+    };
+
+    const renderWarehouseTrend = (trend, filters) => {
+        const gran = String(trend?.granularity || '').toLowerCase();
+        const points = Array.isArray(trend?.points) ? trend.points : [];
+
+        const labelEl = $('#warehouseGranularityLabel');
+        const granLabel = (gran === 'session') ? 'Session (AM/PM)' : (gran === 'day') ? 'Day' : (gran === 'week') ? 'Week' : (gran === 'month') ? 'Month' : '—';
+        if (labelEl) labelEl.textContent = `Viewing data by: ${granLabel}`;
+
+        const labels = points.map(p => {
+            const s = p.start_date;
+            const e = p.end_date;
+            if (gran === 'month') return fmtMonth(s);
+            if (gran === 'day') return fmtDateShort(s);
+            if (gran === 'session') {
+                const slot = String(p.time_slot || '').toUpperCase();
+                const slotLabel = (slot === 'AM' || slot === 'PM') ? ` ${slot}` : '';
+                return `${fmtDateShort(s)}${slotLabel}`;
+            }
+            return (s && e) ? `${fmtDateShort(s)}–${fmtDateShort(e)}` : (p.label || '');
+        });
+        const vols = points.map(p => Number(p.volume || 0));
+        const counts = points.map(p => Number(p.count || 0));
+
+        const totalVol = vols.reduce((a, b) => a + b, 0);
+        const totalCnt = counts.reduce((a, b) => a + b, 0);
+
+        const note = $('#warehouseTrendNote');
+        if (note) {
+            note.textContent = `${filters.start} to ${filters.end} • Completed deliveries: ${fmt(totalCnt)} • Total volume: ${fmt(totalVol)} bags`;
+        }
+
+        const canvas = $('#warehouseMonthlyChart');
+        if (!canvas || typeof Chart === 'undefined') return;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+
+        if (warehouseTrendChart) {
+            try { warehouseTrendChart.destroy(); } catch { /* ignore */ }
+            warehouseTrendChart = null;
+        }
+
+        warehouseTrendChart = new Chart(ctx, {
+            plugins: [NFAValueLabelsPlugin],
+            type: 'line',
+            data: {
+                labels,
+                datasets: [{
+                    label: 'Completed Volume (bags)',
+                    data: vols,
+                    counts,
+                    borderColor: 'rgba(52, 152, 219, 1)',
+                    backgroundColor: 'rgba(52, 152, 219, 0.18)',
+                    tension: 0.28,
+                    fill: true,
+                    pointRadius: 3,
+                    pointHoverRadius: 5,
+                    borderWidth: 2
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    y: { beginAtZero: true, ticks: { callback: (v) => fmt(v) } }
+                },
+                plugins: {
+                    legend: { display: false },
+                    nfaValueLabels: {
+                        type: 'line',
+                        datasetIndex: 0,
+                        granularity: gran,
+                        maxDailyAll: 14,
+                        maxOtherAll: 18,
+                        font: '700 10px Arial',
+                        formatter: (value) => fmt(value)
+                    },
+                    tooltip: {
+                        callbacks: {
+                            label: (context) => {
+                                const v = Number(context.raw || 0);
+                                return `Volume: ${fmt(v)} bags`;
+                            },
+                            afterBody: (items) => {
+                                const it = items && items[0];
+                                const idx = it ? it.dataIndex : -1;
+                                const c = (idx >= 0 && idx < counts.length) ? counts[idx] : 0;
+                                return `Completed appointments: ${fmt(c)}`;
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    };
+
+    const runWarehouseReport = async () => {
+        const filters = getFilters();
+        // Warehouse report trend is always based on completed deliveries.
+        // Status chips are disabled in warehouse mode, but validation still expects at least one status.
+        filters.statuses = ['completed'];
+        const err = validateFilters(filters);
+        if (err) {
+            notify(err, 'warning');
+            return;
+        }
+
+        // Warehouse report always uses completed appointments for monthly aggregation.
+        const btns = [$('#btnModeAppointments'), $('#btnModeWarehouse'), $('#btnPrintReport'), $('#btnResetFilters')].filter(Boolean);
+        try {
+            await withLoading('Loading warehouse report…', btns, async () => {
+                const data = await fetchWarehouseReport(filters);
+                state.warehouse.data = data;
+                renderWarehouseCapacity(data.capacity || {});
+
+                renderWarehouseTrend(data.trend || {}, filters);
+                try { updateUpdatedText(); } catch { /* ignore */ }
+            });
+        } catch (e) {
+            const msg = (e && e.message) ? e.message : 'Failed to load warehouse report.';
+            notify(msg, 'danger');
+            const updated = $('#reportsUpdatedText');
+            if (updated) updated.textContent = 'Error';
+        }
+    };
+
+    const runActiveReport = async ({ resetPage = true } = {}) => {
+        if (state.mode === 'warehouse') return runWarehouseReport();
+        return runReport({ resetPage });
+    };
+
     const runReport = async ({ resetPage = true } = {}) => {
         const filters = getFilters();
         const err = validateFilters(filters);
@@ -386,12 +660,6 @@
             await withLoading('Generating report…', btns, async () => {
                 const overview = await fetchOverview(filters);
                 renderKpis(overview.summary || {}, overview.status || []);
-
-                try {
-                    renderSimple(overview);
-                } catch (e) {
-                    notify('Visual summaries failed to render. KPIs and table still updated.', 'warning');
-                }
 
                 const table = await fetchTable(filters);
                 state.table.total = Number(table.total || 0);
@@ -436,6 +704,75 @@
         if (!w) notify('Pop-up blocked. Please allow pop-ups to open the print view.', 'warning');
     };
 
+        const getCanvasDataUrl = (sel) => {
+                const canvas = $(sel);
+                if (!canvas || typeof canvas.toDataURL !== 'function') return '';
+                try {
+                        return canvas.toDataURL('image/png');
+                } catch {
+                        return '';
+                }
+        };
+
+        const printWarehouseReport = async () => {
+                const filters = getFilters();
+                // Warehouse intake trend is always based on completed deliveries.
+                filters.statuses = ['completed'];
+
+                const err = validateFilters(filters);
+                if (err) {
+                        notify(err, 'warning');
+                        return;
+                }
+
+                const ok = (typeof confirmDialog === 'function')
+                        ? await confirmDialog({
+                                title: 'Print Warehouse Report',
+                                message: 'Open a print-ready warehouse report with the charts using the current filters?',
+                                confirmText: 'Open Print View',
+                                cancelText: 'Cancel',
+                                tone: 'primary'
+                        })
+                        : window.confirm('Open a print-ready warehouse report with the charts using the current filters?');
+
+                if (!ok) return;
+
+                try {
+                        const btns = [$('#btnModeAppointments'), $('#btnModeWarehouse'), $('#btnPrintReport'), $('#btnResetFilters')].filter(Boolean);
+                        await withLoading('Preparing print view…', btns, async () => {
+                                // Always fetch fresh so the printout matches the active filters.
+                                const data = await fetchWarehouseReport(filters);
+                                state.warehouse.data = data;
+
+                                // Ensure canvases are up-to-date before capturing.
+                                try { renderWarehouseCapacity(data.capacity || {}); } catch { /* ignore */ }
+                                try { renderWarehouseTrend(data.trend || {}, filters); } catch { /* ignore */ }
+
+                                const donutUrl = getCanvasDataUrl('#warehouseStatusChart');
+                                const trendUrl = getCanvasDataUrl('#warehouseMonthlyChart');
+                                const noteText = ($('#warehouseTrendNote')?.textContent || '').trim();
+
+                                const token = `${Date.now()}_${Math.random().toString(16).slice(2)}`;
+                                try {
+                                        localStorage.setItem(
+                                                `nfa_warehouse_print_${token}`,
+                                                JSON.stringify({ donut: donutUrl, trend: trendUrl, note: noteText })
+                                        );
+                                } catch {
+                                        // If storage fails, the print page will show placeholders.
+                                }
+
+                                const q = buildQuery(filters, { token });
+                                const url = `reports_warehouse_print.php?${q.toString()}`;
+                                const w = window.open(url, '_blank');
+                                if (!w) notify('Pop-up blocked. Please allow pop-ups to open the print view.', 'warning');
+                        });
+                } catch (e) {
+                        const msg = (e && e.message) ? e.message : 'Failed to open warehouse print view.';
+                        notify(msg, 'danger');
+                }
+        };
+
     const resetFilters = () => {
         const preset = window.reportsPreset || {};
         $('#filterStart').value = preset.start || $('#filterStart').value;
@@ -450,7 +787,7 @@
         });
 
         state.table.page = 1;
-        state.table.pageSize = parseInt($('#tablePageSize')?.value || '25', 10) || 25;
+        state.table.pageSize = 10;
     };
 
     const setQuickRange = (days) => {
@@ -463,31 +800,58 @@
     };
 
     const init = () => {
-        // Table page size
-        const pageSizeSel = $('#tablePageSize');
-        pageSizeSel && pageSizeSel.addEventListener('change', () => {
-            state.table.pageSize = parseInt(pageSizeSel.value || '25', 10) || 25;
-            state.table.page = 1;
-            if (state.table.lastFilters) runReport({ resetPage: false });
+        // Table page size is fixed (10 rows).
+
+        setModeButtonState(state.mode);
+
+        $('#btnModeAppointments')?.addEventListener('click', () => {
+            state.mode = 'appointments';
+            setModeButtonState(state.mode);
+            runActiveReport({ resetPage: true }).catch(() => { /* handled */ });
+        });
+        $('#btnModeWarehouse')?.addEventListener('click', () => {
+            state.mode = 'warehouse';
+            setModeButtonState(state.mode);
+            runActiveReport({ resetPage: true }).catch(() => { /* handled */ });
         });
 
         $('#btnPrev')?.addEventListener('click', () => {
+            if (state.mode !== 'appointments') return;
             state.table.page = Math.max(1, state.table.page - 1);
             if (state.table.lastFilters) runReport({ resetPage: false });
         });
         $('#btnNext')?.addEventListener('click', () => {
+            if (state.mode !== 'appointments') return;
             state.table.page += 1;
             if (state.table.lastFilters) runReport({ resetPage: false });
         });
 
-        const runBtns = ['btnRunReport', 'btnApplyFilters'].map(id => document.getElementById(id)).filter(Boolean);
-        runBtns.forEach(btn => btn.addEventListener('click', () => runReport()));
+        const scheduleAutoRun = debounce(() => {
+            state.table.page = 1;
+            runActiveReport({ resetPage: true }).catch(() => { /* handled */ });
+        }, 250);
 
-        $('#btnPrintReport')?.addEventListener('click', printReport);
+        // Auto-apply: any filter change triggers a refresh.
+        ['#filterStart', '#filterEnd', '#filterSlot', '#filterType'].forEach(sel => {
+            $(sel)?.addEventListener('change', scheduleAutoRun);
+        });
+        document.querySelectorAll('#statusChips input[type="checkbox"]').forEach(cb => {
+            cb.addEventListener('change', scheduleAutoRun);
+        });
+
+        $('#btnPrintReport')?.addEventListener('click', (e) => {
+            e.preventDefault();
+            if (state.mode === 'warehouse') {
+                printWarehouseReport();
+                return;
+            }
+            printReport();
+        });
+
         $('#btnResetFilters')?.addEventListener('click', () => {
             resetFilters();
             if (typeof showToast === 'function') showToast('Filters reset.', 'info');
-            runReport().catch(() => { /* handled in runReport */ });
+            runActiveReport({ resetPage: true }).catch(() => { /* handled */ });
         });
 
         $('#btnQuickMonth')?.addEventListener('click', () => {
@@ -499,17 +863,17 @@
             $('#filterEnd').value = toYmd(end);
 
             state.table.page = 1;
-            runReport().catch(() => { /* handled in runReport */ });
+            runActiveReport({ resetPage: true }).catch(() => { /* handled */ });
         });
 
         $('#btnQuickWeek')?.addEventListener('click', () => {
             setQuickRange(7);
             state.table.page = 1;
-            runReport().catch(() => { /* handled in runReport */ });
+            runActiveReport({ resetPage: true }).catch(() => { /* handled */ });
         });
 
         // First paint: run once automatically
-        runReport().catch((e) => {
+        runActiveReport({ resetPage: true }).catch((e) => {
             const msg = (e && e.message) ? e.message : 'Failed to generate report.';
             notify(msg, 'danger');
         });

@@ -101,17 +101,27 @@ if ($download) {
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Appointment Confirmation</title>
-    <link rel="stylesheet" href="css/print_template.css?v=<?php echo urlencode((string)@filemtime(__DIR__ . '/css/print_template.css')); ?>">
+    <?php if ($download): ?>
+        <?php
+        $css = @file_get_contents(__DIR__ . '/css/print_template.css');
+        if ($css === false) $css = '';
+        ?>
+        <style><?php echo $css; ?></style>
+    <?php else: ?>
+        <link rel="stylesheet" href="css/print_template.css?v=<?php echo urlencode((string)@filemtime(__DIR__ . '/css/print_template.css')); ?>">
+    <?php endif; ?>
 </head>
 <body class="nfa-print">
     <div class="print-page">
-        <?php nfa_print_header('Appointment Confirmation', $branchCtx, ['generated' => date('Y-m-d H:i')]); ?>
+        <?php nfa_print_header('Appointment Confirmation', $branchCtx, ['generated' => date('Y-m-d H:i'), 'embed_assets' => $download]); ?>
 
         <div class="print-body">
-            <div class="no-print" style="display:flex; gap:10px; justify-content:flex-end; margin-bottom:10px;">
-                <a href="farmer_schedule.php" style="text-decoration:none; border:1px solid #cfd6df; padding:8px 10px; border-radius:8px; color:#111;">Back</a>
-                <button onclick="window.print()" style="border:1px solid #0b6a2b; background:#0b6a2b; color:#fff; padding:8px 10px; border-radius:8px; cursor:pointer;">Print</button>
-            </div>
+            <?php if (!$download): ?>
+                <div class="no-print" style="display:flex; gap:10px; justify-content:flex-end; margin-bottom:10px;">
+                    <button type="button" id="backBtn" style="text-decoration:none; border:1px solid #cfd6df; padding:8px 10px; border-radius:8px; color:#111; background:#fff; cursor:pointer;">Back</button>
+                    <button onclick="window.print()" style="border:1px solid #0b6a2b; background:#0b6a2b; color:#fff; padding:8px 10px; border-radius:8px; cursor:pointer;">Print</button>
+                </div>
+            <?php endif; ?>
 
             <div class="section">
                 <p class="section-title">Confirmation Details</p>
@@ -170,5 +180,44 @@ if ($download) {
         });
     </script>
     <?php endif; ?>
+
+    <script>
+        (function () {
+            const backBtn = document.getElementById('backBtn');
+            if (!backBtn) return;
+
+            const fallbackUrl = 'farmer_schedule.php';
+
+            backBtn.addEventListener('click', () => {
+                try {
+                    if (window.opener && !window.opener.closed) {
+                        try { window.opener.focus(); } catch (e) {}
+                    }
+                } catch (e) {
+                    // ignore
+                }
+
+                // Close the print preview tab/window (works when opened via window.open)
+                try {
+                    window.close();
+                } catch (e) {
+                    // ignore
+                }
+
+                // Fallback if the browser blocks window.close()
+                setTimeout(() => {
+                    try {
+                        if (history.length > 1) {
+                            history.back();
+                        } else {
+                            window.location.href = fallbackUrl;
+                        }
+                    } catch (e) {
+                        window.location.href = fallbackUrl;
+                    }
+                }, 120);
+            });
+        })();
+    </script>
 </body>
 </html>

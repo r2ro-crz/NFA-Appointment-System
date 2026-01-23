@@ -9,8 +9,13 @@ document.addEventListener('DOMContentLoaded', () => {
     const modalRef = document.getElementById('modalReference');
     const modalDate = document.getElementById('modalDate');
     const modalSlot = document.getElementById('modalSlot');
+    const modalMode = document.getElementById('modalMode');
     const modalVolume = document.getElementById('modalVolume');
     const modalStatus = document.getElementById('modalStatus');
+
+    const modalCancellation = document.getElementById('modalCancellation');
+    const modalCancelledAt = document.getElementById('modalCancelledAt');
+    const modalCancelReason = document.getElementById('modalCancelReason');
     const modalFarmerId = document.getElementById('modalFarmerId');
     const modalFarmerType = document.getElementById('modalFarmerType');
     const modalGender = document.getElementById('modalGender');
@@ -59,6 +64,35 @@ document.addEventListener('DOMContentLoaded', () => {
     let selectedReschedDate = null;
     let selectedSlot = null;
 
+    const notify = (message, type = 'warning') => {
+        if (!message) return;
+
+        if (typeof showToast === 'function') {
+            showToast(message, type);
+            return;
+        }
+
+        // Fallback: lightweight toast (auto-closes)
+        try {
+            const existing = document.querySelectorAll('.toast');
+            existing.forEach(t => t.remove());
+
+            const toast = document.createElement('div');
+            toast.className = `toast toast-${type}`;
+            toast.innerHTML = `<span class="toast-message"></span>`;
+            toast.querySelector('.toast-message').textContent = message;
+            document.body.appendChild(toast);
+            setTimeout(() => toast.classList.add('show'), 10);
+            setTimeout(() => {
+                toast.classList.remove('show');
+                setTimeout(() => toast.remove(), 250);
+            }, 3500);
+        } catch (e) {
+            // Last resort
+            console.warn(message);
+        }
+    };
+
     const formatDateYmd = (date) => {
         if (!date) return '';
         const d = new Date(date);
@@ -98,6 +132,10 @@ document.addEventListener('DOMContentLoaded', () => {
         modalRef.textContent = `Reference: ${btn.dataset.reference || ''}`;
         modalDate.textContent = btn.dataset.date || '';
         modalSlot.textContent = btn.dataset.slot || '';
+        if (modalMode) {
+            const modeLabel = (btn.dataset.mode || 'Appointment').trim();
+            modalMode.textContent = modeLabel || 'Appointment';
+        }
         modalVolume.textContent = btn.dataset.volume || '';
         modalStatus.textContent = currentStatus ? currentStatus.charAt(0).toUpperCase() + currentStatus.slice(1) : '';
         modalFarmerId.textContent = btn.dataset.farmerId || '';
@@ -110,17 +148,42 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Enable/disable actions based on status
         const statusLower = currentStatus.toLowerCase();
+        const isCancelled = (statusLower === 'cancelled' || statusLower === 'canceled');
+        const isCompleted = (statusLower === 'completed');
         const isConfirmedLike = (statusLower === 'confirmed' || statusLower === 'rescheduled');
 
-        if (btnConfirm) {
-            btnConfirm.disabled = isConfirmedLike;
+        // Cancellation details (only for cancelled/canceled)
+        if (modalCancellation) {
+            if (isCancelled) {
+                const cancelledAtLabel = (btn.dataset.cancelledAtLabel || '').trim();
+                const cancelReason = (btn.dataset.cancelReason || '').trim();
+
+                if (modalCancelledAt) modalCancelledAt.textContent = cancelledAtLabel || '—';
+                if (modalCancelReason) modalCancelReason.textContent = cancelReason || '—';
+                modalCancellation.style.display = 'block';
+            } else {
+                modalCancellation.style.display = 'none';
+                if (modalCancelledAt) modalCancelledAt.textContent = '';
+                if (modalCancelReason) modalCancelReason.textContent = '';
+            }
         }
-        if (btnReschedule) {
-            btnReschedule.disabled = isConfirmedLike;
-        }
-        if (btnReceive) {
-            // Only allow receive for confirmed appointments
-            btnReceive.disabled = !isConfirmedLike;
+
+        // Completed and cancelled are terminal states
+        if (isCancelled || isCompleted) {
+            if (btnConfirm) btnConfirm.disabled = true;
+            if (btnReschedule) btnReschedule.disabled = true;
+            if (btnReceive) btnReceive.disabled = true;
+        } else {
+            if (btnConfirm) {
+                btnConfirm.disabled = isConfirmedLike;
+            }
+            if (btnReschedule) {
+                btnReschedule.disabled = isConfirmedLike;
+            }
+            if (btnReceive) {
+                // Receive click is handled with additional rules (e.g., rescheduled must be farmer-confirmed first)
+                btnReceive.disabled = !isConfirmedLike;
+            }
         }
 
         modal.style.display = 'flex';
@@ -177,6 +240,15 @@ document.addEventListener('DOMContentLoaded', () => {
     if (btnConfirm) {
         btnConfirm.addEventListener('click', async () => {
             if (!currentAppointmentId) return;
+            const statusLower = String(currentStatus || '').toLowerCase();
+            if (statusLower === 'cancelled' || statusLower === 'canceled') {
+                if (typeof showToast === 'function') showToast('Cancelled appointments cannot be modified.', 'warning');
+                return;
+            }
+            if (statusLower === 'completed') {
+                if (typeof showToast === 'function') showToast('Completed appointments cannot be modified.', 'warning');
+                return;
+            }
             const ok = (typeof confirmDialog === 'function')
                 ? await confirmDialog({
                     title: 'Confirm Appointment',
@@ -237,6 +309,19 @@ document.addEventListener('DOMContentLoaded', () => {
     // Receive delivery
     const openReceiveModal = () => {
         if (!currentAppointmentId) return;
+        const statusLower = String(currentStatus || '').toLowerCase();
+        if (statusLower === 'cancelled' || statusLower === 'canceled') {
+            notify('Cancelled appointments cannot be marked as received.', 'warning');
+            return;
+        }
+        if (statusLower === 'completed') {
+            notify('This appointment is already completed.', 'warning');
+            return;
+        }
+        if (statusLower === 'rescheduled') {
+            notify('Rescheduled appointments must be confirmed by the farmer first before accepting delivery.', 'warning');
+            return;
+        }
         receiveInput.value = currentVolume || 0;
         if (receiveModal) {
             receiveModal.style.display = 'flex';
@@ -259,6 +344,19 @@ document.addEventListener('DOMContentLoaded', () => {
     if (receiveSubmit) {
         receiveSubmit.addEventListener('click', async () => {
             if (!currentAppointmentId) return;
+            const statusLower = String(currentStatus || '').toLowerCase();
+            if (statusLower === 'cancelled' || statusLower === 'canceled') {
+                notify('Cancelled appointments cannot be marked as received.', 'warning');
+                return;
+            }
+            if (statusLower === 'completed') {
+                notify('This appointment is already completed.', 'warning');
+                return;
+            }
+            if (statusLower === 'rescheduled') {
+                notify('Rescheduled appointments must be confirmed by the farmer first before accepting delivery.', 'warning');
+                return;
+            }
             const newVolume = parseFloat(receiveInput?.value ?? '');
             if (Number.isNaN(newVolume) || newVolume < 0) {
                 if (typeof showToast === 'function') {
@@ -348,6 +446,15 @@ document.addEventListener('DOMContentLoaded', () => {
     // Reschedule helpers
     const openReschedModal = () => {
         if (!currentAppointmentId || !branchId) return;
+        const statusLower = String(currentStatus || '').toLowerCase();
+        if (statusLower === 'cancelled' || statusLower === 'canceled') {
+            if (typeof showToast === 'function') showToast('Cancelled appointments cannot be rescheduled.', 'warning');
+            return;
+        }
+        if (statusLower === 'completed') {
+            if (typeof showToast === 'function') showToast('Completed appointments cannot be rescheduled.', 'warning');
+            return;
+        }
         const baseDate = currentDateIso ? new Date(currentDateIso) : new Date();
         reschedYear = baseDate.getFullYear();
         reschedMonth = baseDate.getMonth() + 1;
@@ -554,6 +661,11 @@ document.addEventListener('DOMContentLoaded', () => {
     if (reschedSubmit) {
         reschedSubmit.addEventListener('click', async () => {
             if (!currentAppointmentId || !selectedReschedDate || !selectedSlot) return;
+            const statusLower = String(currentStatus || '').toLowerCase();
+            if (statusLower === 'cancelled' || statusLower === 'canceled') {
+                if (typeof showToast === 'function') showToast('Cancelled appointments cannot be rescheduled.', 'warning');
+                return;
+            }
 
             await withLoading('Rescheduling appointment (and notifying farmer)…', [reschedSubmit, btnConfirm, btnReschedule, btnReceive], async () => {
                 try {

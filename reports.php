@@ -64,7 +64,21 @@ if ($type === 'daily' || $type === 'week') {
 }
 
 // Notifications
-$notif_stmt = $pdo->prepare("SELECT appointment_id, first_name, last_name, status, date, time_slot, volume, is_read FROM appointments WHERE branch_id = ? AND status IN ('pending', 'cancelled') ORDER BY appointment_id DESC LIMIT 10");
+$has_notif_deleted = false;
+try {
+    $col = $pdo->query("SHOW COLUMNS FROM appointments LIKE 'notif_deleted'")->fetch(PDO::FETCH_ASSOC);
+    $has_notif_deleted = !empty($col);
+} catch (PDOException $e) {
+    $has_notif_deleted = false;
+}
+
+$notif_sql = "SELECT appointment_id, first_name, last_name, status, date, time_slot, volume, is_read FROM appointments WHERE branch_id = ? AND status IN ('pending', 'cancelled')";
+if ($has_notif_deleted) {
+    $notif_sql .= " AND (notif_deleted IS NULL OR notif_deleted = 0)";
+}
+$notif_sql .= " ORDER BY appointment_id DESC LIMIT 10";
+
+$notif_stmt = $pdo->prepare($notif_sql);
 $notif_stmt->execute([$branch_id]);
 $notifications = $notif_stmt->fetchAll(PDO::FETCH_ASSOC);
 $new_count = count(array_filter($notifications, fn($n) => (empty($n['is_read']) || $n['is_read'] == 0)));
@@ -169,6 +183,9 @@ $new_count = count(array_filter($notifications, fn($n) => (empty($n['is_read']) 
                                             <input class="notif-checkbox" type="checkbox" <?php echo $unread ? '' : 'checked'; ?> aria-label="Toggle read status">
                                             <span class="notif-check-ui" aria-hidden="true"></span>
                                         </label>
+                                        <span class="notif-delete" role="button" tabindex="0" title="Delete notification" aria-label="Delete notification">
+                                            <i class="fas fa-trash"></i>
+                                        </span>
                                     </div>
                                 </a>
                             <?php endforeach; ?>
@@ -201,8 +218,22 @@ $new_count = count(array_filter($notifications, fn($n) => (empty($n['is_read']) 
                         </div>
                     </div>
                     <div class="user-dropdown-menu">
-                        <a href="profile.php" class="dropdown-item"><i class="fas fa-user-cog"></i> My Profile</a>
-                        <a href="settings.php" class="dropdown-item"><i class="fas fa-cog"></i> Settings</a>
+                        <a href="profile.php" class="dropdown-item">
+                            <i class="fas fa-user-cog"></i>
+                            <span class="dropdown-item-content">
+                                <span class="dropdown-item-title">My Profile</span>
+                                <span class="dropdown-item-desc">View and update your account</span>
+                            </span>
+                            <i class="fas fa-chevron-right dropdown-item-arrow"></i>
+                        </a>
+                        <a href="settings.php" class="dropdown-item">
+                            <i class="fas fa-cog"></i>
+                            <span class="dropdown-item-content">
+                                <span class="dropdown-item-title">Settings</span>
+                                <span class="dropdown-item-desc">Preferences and appearance</span>
+                            </span>
+                            <i class="fas fa-chevron-right dropdown-item-arrow"></i>
+                        </a>
                         <div class="dropdown-divider"></div>
                         <a href="login.php" class="dropdown-item logout"><i class="fas fa-sign-out-alt"></i> Logout</a>
                     </div>
@@ -217,13 +248,14 @@ $new_count = count(array_filter($notifications, fn($n) => (empty($n['is_read']) 
                 <h1>Branch Reports</h1>
                 <p class="reports-subtitle">Analytics for <strong><?php echo htmlspecialchars($branch_name); ?></strong> • <span><?php echo htmlspecialchars($region_name); ?></span></p>
                 <div class="reports-hero-actions">
-                    <button class="btn-view-details btn-inline-primary" id="btnRunReport"><i class="fas fa-wand-magic-sparkles"></i> Run Report</button>
+                    <button class="btn-view-details btn-inline-primary report-mode-btn is-active" id="btnModeAppointments" type="button"><i class="fas fa-table"></i> Appointment Report</button>
+                    <button class="btn-view-details btn-inline-secondary report-mode-btn" id="btnModeWarehouse" type="button"><i class="fas fa-warehouse"></i> Warehouse Report</button>
                     <button class="btn-view-details btn-inline-secondary" id="btnPrintReport"><i class="fas fa-print"></i> Print Report</button>
                 </div>
             </div>
             <div class="reports-hero-right">
                 <div class="reports-updated" id="reportsUpdatedText">Ready</div>
-                <div class="reports-tip"><i class="fas fa-lightbulb"></i> Tip: Use filters to generate precise summaries.</div>
+                <div class="reports-tip"><i class="fas fa-lightbulb"></i> Tip: Filters auto-apply as you change them.</div>
             </div>
         </div>
 
@@ -277,14 +309,17 @@ $new_count = count(array_filter($notifications, fn($n) => (empty($n['is_read']) 
                         </div>
                     </div>
 
+                    <div class="warehouse-only-note muted" id="warehouseOnlyNote" hidden>
+                        Warehouse report uses <strong>completed</strong> appointments (delivery date).
+                    </div>
+
                     <div class="filter-actions">
-                        <button class="btn-view-details btn-inline-primary" id="btnApplyFilters" type="button"><i class="fas fa-chart-simple"></i> Apply</button>
                         <button class="btn-view-details btn-inline-secondary" id="btnQuickMonth" type="button"><i class="fas fa-calendar"></i> This Month</button>
                         <button class="btn-view-details btn-inline-secondary" id="btnQuickWeek" type="button"><i class="fas fa-calendar-week"></i> Last 7 Days</button>
                     </div>
                 </div>
 
-                <div class="filter-card subtle">
+                <div class="filter-card subtle" id="appointmentMiniMetrics">
                     <div class="mini-metrics">
                         <div class="mini-metric">
                             <div class="label">Completion Rate</div>
@@ -299,49 +334,66 @@ $new_count = count(array_filter($notifications, fn($n) => (empty($n['is_read']) 
             </aside>
 
             <main class="reports-content">
+                <div id="appointmentReport">
                 <section class="kpi-row">
-                    <div class="kpi"><div class="kpi-ico total"><i class="fas fa-list-check"></i></div><div><div class="kpi-label">Total Appointments</div><div class="kpi-val" id="kpiTotal">0</div></div></div>
-                    <div class="kpi"><div class="kpi-ico volume"><i class="fas fa-weight-hanging"></i></div><div><div class="kpi-label">Total Volume</div><div class="kpi-val"><span id="kpiVolume">0</span><span class="kpi-unit">bags</span></div></div></div>
-                    <div class="kpi"><div class="kpi-ico done"><i class="fas fa-circle-check"></i></div><div><div class="kpi-label">Completed</div><div class="kpi-val" id="kpiCompleted">0</div></div></div>
-                    <div class="kpi"><div class="kpi-ico pending"><i class="fas fa-hourglass-half"></i></div><div><div class="kpi-label">Pending</div><div class="kpi-val" id="kpiPending">0</div></div></div>
-                </section>
+                    <div class="kpi">
+                        <div class="kpi-ico total"><i class="fas fa-list-check"></i></div>
+                        <div>
+                            <div class="kpi-label">Total Appointments</div>
+                            <div class="kpi-val" id="kpiTotalCount">0</div>
+                            <div class="kpi-sub"><span id="kpiTotalBags">0</span> bag(s)</div>
+                        </div>
+                    </div>
 
-                <section class="charts-grid simple" aria-label="Report visual summaries">
-                    <div class="panel">
-                        <div class="panel-head"><h2><i class="fas fa-chart-line"></i> Daily Trend</h2><div class="hint">Appointments & volume per day</div></div>
-                        <div class="simple-viz" id="vizDaily" aria-live="polite"></div>
+                    <div class="kpi">
+                        <div class="kpi-ico completed"><i class="fas fa-circle-check"></i></div>
+                        <div>
+                            <div class="kpi-label">Completed Appointments</div>
+                            <div class="kpi-val" id="kpiCompletedCount">0</div>
+                            <div class="kpi-sub"><span id="kpiCompletedBags">0</span> bag(s)</div>
+                        </div>
                     </div>
-                    <div class="panel">
-                        <div class="panel-head"><h2><i class="fas fa-chart-pie"></i> Status</h2><div class="hint">Distribution</div></div>
-                        <div class="simple-viz" id="vizStatus" aria-live="polite"></div>
+
+                    <div class="kpi">
+                        <div class="kpi-ico confirmed"><i class="fas fa-circle-check"></i></div>
+                        <div>
+                            <div class="kpi-label">Confirmed Appointments</div>
+                            <div class="kpi-val" id="kpiConfirmedCount">0</div>
+                            <div class="kpi-sub"><span id="kpiConfirmedBags">0</span> bag(s)</div>
+                        </div>
                     </div>
-                    <div class="panel">
-                        <div class="panel-head"><h2><i class="fas fa-clock"></i> Time Slot</h2><div class="hint">AM vs PM</div></div>
-                        <div class="simple-viz" id="vizSlot" aria-live="polite"></div>
+
+                    <div class="kpi">
+                        <div class="kpi-ico rescheduled"><i class="fas fa-clock-rotate-left"></i></div>
+                        <div>
+                            <div class="kpi-label">Rescheduled Appointment</div>
+                            <div class="kpi-val" id="kpiRescheduledCount">0</div>
+                            <div class="kpi-sub"><span id="kpiRescheduledBags">0</span> bag(s)</div>
+                        </div>
                     </div>
-                    <div class="panel">
-                        <div class="panel-head"><h2><i class="fas fa-people-group"></i> Farmer Type</h2><div class="hint">Count & volume</div></div>
-                        <div class="simple-viz" id="vizType" aria-live="polite"></div>
+
+                    <div class="kpi">
+                        <div class="kpi-ico pending"><i class="fas fa-hourglass-half"></i></div>
+                        <div>
+                            <div class="kpi-label">Pending Appointments</div>
+                            <div class="kpi-val" id="kpiPendingCount">0</div>
+                            <div class="kpi-sub"><span id="kpiPendingBags">0</span> bag(s)</div>
+                        </div>
                     </div>
-                    <div class="panel wide">
-                        <div class="panel-head"><h2><i class="fas fa-ranking-star"></i> Top Farmers</h2><div class="hint">By volume</div></div>
-                        <div class="simple-viz" id="vizTop" aria-live="polite"></div>
+
+                    <div class="kpi">
+                        <div class="kpi-ico cancelled"><i class="fas fa-ban"></i></div>
+                        <div>
+                            <div class="kpi-label">Cancelled Appointments</div>
+                            <div class="kpi-val" id="kpiCancelledCount">0</div>
+                            <div class="kpi-sub"><span id="kpiCancelledBags">0</span> bag(s)</div>
+                        </div>
                     </div>
                 </section>
 
                 <section class="table-panel">
                     <div class="panel-head">
                         <h2><i class="fas fa-table"></i> Appointments</h2>
-                        <div class="table-actions">
-                            <label class="table-size">
-                                <span>Rows</span>
-                                <select id="tablePageSize">
-                                    <option value="25" selected>25</option>
-                                    <option value="50">50</option>
-                                    <option value="100">100</option>
-                                </select>
-                            </label>
-                        </div>
                     </div>
 
                     <div class="table-wrap">
@@ -369,6 +421,42 @@ $new_count = count(array_filter($notifications, fn($n) => (empty($n['is_read']) 
                         <button class="btn-mini" id="btnNext" type="button">Next <i class="fas fa-chevron-right"></i></button>
                     </div>
                 </section>
+                </div>
+
+                <div id="warehouseReport" class="warehouse-report" hidden>
+                    <section class="warehouse-panels">
+                        <div class="table-panel">
+                            <div class="panel-head">
+                                <h2><i class="fas fa-chart-pie"></i> Current Warehouse Status</h2>
+                            </div>
+                            <div class="warehouse-meta">
+                                <div class="warehouse-legend">
+                                    <span><span class="lg inv"></span> Current Inventory</span>
+                                    <span><span class="lg avail"></span> Available Capacity</span>
+                                </div>
+                                <div class="warehouse-metrics" id="warehouseCapacityMetrics">
+                                    <span class="muted">Loading…</span>
+                                </div>
+                            </div>
+                            <div class="warehouse-chart">
+                                <canvas id="warehouseStatusChart" height="260"></canvas>
+                            </div>
+                        </div>
+
+                        <div class="table-panel">
+                            <div class="panel-head">
+                                <h2><i class="fas fa-chart-line"></i> Warehouse Intake Trend</h2>
+                                <div class="period-selector">
+                                    <span class="granularity-pill" id="warehouseGranularityLabel">Viewing data by: —</span>
+                                </div>
+                            </div>
+                            <div class="warehouse-chart">
+                                <canvas id="warehouseMonthlyChart" height="260"></canvas>
+                            </div>
+                            <div class="warehouse-footnote muted" id="warehouseTrendNote"></div>
+                        </div>
+                    </section>
+                </div>
             </main>
         </div>
     </div>
@@ -382,7 +470,7 @@ $new_count = count(array_filter($notifications, fn($n) => (empty($n['is_read']) 
         ]); ?>;
     </script>
 
-    <!-- Reports uses lightweight DOM summaries (no Chart.js) for performance on low-end devices. -->
+    <!-- Chart.js is used only for the Warehouse Report view. -->
 
     <script>
         // Reports should be stable and not auto-reload on cross-tab appointment broadcasts.
@@ -392,6 +480,8 @@ $new_count = count(array_filter($notifications, fn($n) => (empty($n['is_read']) 
     <script src="js/loading_ui.js?v=<?php echo urlencode((string)@filemtime(__DIR__ . '/js/loading_ui.js')); ?>"></script>
     <script src="js/refresh_bus.js?v=<?php echo urlencode((string)@filemtime(__DIR__ . '/js/refresh_bus.js')); ?>"></script>
     <script src="js/processor.js?v=<?php echo urlencode((string)@filemtime(__DIR__ . '/js/processor.js')); ?>"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2"></script>
     <script src="js/reports.js?v=<?php echo urlencode((string)@filemtime(__DIR__ . '/js/reports.js')); ?>"></script>
 </body>
 </html>

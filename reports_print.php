@@ -16,8 +16,8 @@ if ($branch_id <= 0) {
 }
 
 $user_id = $_SESSION['user_id'] ?? $_SESSION['id'] ?? null;
-
 $branchCtx = nfa_branch_context($pdo, $branch_id);
+$download = (int)($_GET['download'] ?? 0) === 1;
 
 $buildName = function (array $u): string {
     $first = trim((string)($u['first_name'] ?? ''));
@@ -29,6 +29,7 @@ $buildName = function (array $u): string {
     if ($first !== '') $parts[] = $first;
     if ($middle !== '') $parts[] = $middle;
     if ($last !== '') $parts[] = $last;
+
     $name = trim(implode(' ', $parts));
     if ($suffix !== '') $name .= ' ' . $suffix;
     return trim($name);
@@ -122,7 +123,6 @@ if (count($statuses) > 0) {
     $where .= ' AND a.status IN (' . implode(',', $in) . ')';
 }
 
-// Summary
 $stmtSummary = $pdo->prepare(
     "SELECT \n" .
     "  COUNT(*) AS total_appointments,\n" .
@@ -137,7 +137,6 @@ $stmtSummary = $pdo->prepare(
 $stmtSummary->execute($params);
 $summary = $stmtSummary->fetch(PDO::FETCH_ASSOC) ?: [];
 
-// Status rows
 $stmtStatus = $pdo->prepare(
     "SELECT a.status, COUNT(*) AS count\n" .
     "FROM appointments a\n" .
@@ -147,7 +146,6 @@ $stmtStatus = $pdo->prepare(
 $stmtStatus->execute($params);
 $statusRows = $stmtStatus->fetchAll(PDO::FETCH_ASSOC);
 
-// Appointment rows (print: cap to avoid enormous output)
 $maxRows = 800;
 $stmtRows = $pdo->prepare(
     "SELECT a.reference_number, a.`date`, a.time_slot, a.first_name, a.last_name, a.volume, a.status, f.type_name\n" .
@@ -172,20 +170,33 @@ if (count($statuses) > 0) $filtersLineParts[] = 'Status: ' . strtoupper(implode(
 $fmtInt = fn($n) => number_format((int)$n);
 $fmtNum = fn($n) => number_format((float)$n, 0);
 
+if ($download) {
+    $filename = 'Branch_Reports_' . $start_date . '_to_' . $end_date . '.html';
+    header('Content-Type: text/html; charset=utf-8');
+    header('Content-Disposition: attachment; filename="' . $filename . '"');
+    header('X-Content-Type-Options: nosniff');
+}
+
 ?><!doctype html>
 <html lang="en">
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Branch Reports</title>
-    <link rel="stylesheet" href="css/print_template.css?v=<?php echo urlencode((string)@filemtime(__DIR__ . '/css/print_template.css')); ?>">
+    <?php if ($download):
+        $css = @file_get_contents(__DIR__ . '/css/print_template.css');
+    ?>
+        <style><?php echo $css !== false ? $css : ''; ?></style>
+    <?php else: ?>
+        <link rel="stylesheet" href="css/print_template.css?v=<?php echo urlencode((string)@filemtime(__DIR__ . '/css/print_template.css')); ?>">
+    <?php endif; ?>
 </head>
 <body class="nfa-print">
     <table class="print-frame" role="presentation" aria-hidden="true">
         <thead>
             <tr>
                 <td>
-                    <?php nfa_print_header('Branch Reports', $branchCtx, ['hide_doc_title' => true]); ?>
+                    <?php nfa_print_header('Branch Reports', $branchCtx, ['hide_doc_title' => true, 'embed_assets' => $download]); ?>
                 </td>
             </tr>
         </thead>
@@ -193,104 +204,107 @@ $fmtNum = fn($n) => number_format((float)$n, 0);
             <tr>
                 <td>
                     <div class="print-body">
-            <h2 class="doc-title">Branch Reports</h2>
+                        <h2 class="doc-title">Branch Reports</h2>
 
-            <div class="no-print" style="display:flex; gap:10px; justify-content:flex-end; margin-bottom:10px;">
-                <button type="button" onclick="nfaPrintBack()" style="text-decoration:none; border:1px solid #cfd6df; padding:8px 10px; border-radius:8px; color:#111; background:#fff; cursor:pointer;">Back</button>
-                <button onclick="window.print()" style="border:1px solid #0b6a2b; background:#0b6a2b; color:#fff; padding:8px 10px; border-radius:8px; cursor:pointer;">Print</button>
-            </div>
+                        <?php if (!$download): ?>
+                            <div class="no-print" style="display:flex; gap:10px; justify-content:flex-end; margin-bottom:10px;">
+                                <button type="button" onclick="nfaPrintBack()" style="text-decoration:none; border:1px solid #cfd6df; padding:8px 10px; border-radius:8px; color:#111; background:#fff; cursor:pointer;">Back</button>
+                                <button type="button" onclick="nfaDownload()" style="border:1px solid #cfd6df; background:#fff; color:#111; padding:8px 10px; border-radius:8px; cursor:pointer;">Download</button>
+                                <button type="button" onclick="window.print()" style="border:1px solid #0b6a2b; background:#0b6a2b; color:#fff; padding:8px 10px; border-radius:8px; cursor:pointer;">Print</button>
+                            </div>
+                        <?php endif; ?>
 
-            <div class="section">
-                <div class="info-box">
-                    <div class="filter-chips">
-                        <?php foreach ($filtersLineParts as $part): ?>
-                            <span class="filter-chip"><?php echo nfa_escape($part); ?></span>
-                        <?php endforeach; ?>
-                    </div>
-                </div>
-            </div>
+                        <div class="section">
+                            <div class="info-box">
+                                <div class="filter-chips">
+                                    <?php foreach ($filtersLineParts as $part): ?>
+                                        <span class="filter-chip"><?php echo nfa_escape($part); ?></span>
+                                    <?php endforeach; ?>
+                                </div>
+                            </div>
+                        </div>
 
-            <div class="section">
-                <p class="section-title">Summary</p>
-                <div class="kpi-grid">
-                    <div class="kpi"><div class="k">Total Appointments</div><div class="v"><?php echo $fmtInt($summary['total_appointments'] ?? 0); ?></div></div>
-                    <div class="kpi"><div class="k">Total Volume</div><div class="v"><?php echo $fmtNum($summary['total_volume'] ?? 0); ?> bags</div></div>
-                    <div class="kpi"><div class="k">Average Volume</div><div class="v"><?php echo $fmtNum($summary['avg_volume'] ?? 0); ?> bags</div></div>
-                    <div class="kpi"><div class="k">Completed</div><div class="v"><?php echo $fmtInt($summary['completed_count'] ?? 0); ?></div></div>
-                </div>
-            </div>
+                        <div class="section">
+                            <p class="section-title">Summary</p>
+                            <div class="kpi-grid">
+                                <div class="kpi"><div class="k">Total Appointments</div><div class="v"><?php echo $fmtInt($summary['total_appointments'] ?? 0); ?></div></div>
+                                <div class="kpi"><div class="k">Total Volume</div><div class="v"><?php echo $fmtNum($summary['total_volume'] ?? 0); ?> bags</div></div>
+                                <div class="kpi"><div class="k">Average Volume</div><div class="v"><?php echo $fmtNum($summary['avg_volume'] ?? 0); ?> bags</div></div>
+                                <div class="kpi"><div class="k">Completed</div><div class="v"><?php echo $fmtInt($summary['completed_count'] ?? 0); ?></div></div>
+                            </div>
+                        </div>
 
-            <div class="section">
-                <p class="section-title">Status Breakdown</p>
-                <table class="print-table">
-                    <thead><tr><th>Status</th><th>Count</th></tr></thead>
-                    <tbody>
-                    <?php if (!$statusRows): ?>
-                        <tr><td colspan="2" class="muted">No data.</td></tr>
-                    <?php else: foreach ($statusRows as $r): ?>
-                        <tr>
-                            <td><?php echo nfa_escape(ucfirst((string)($r['status'] ?? ''))); ?></td>
-                            <td><?php echo $fmtInt($r['count'] ?? 0); ?></td>
-                        </tr>
-                    <?php endforeach; endif; ?>
-                    </tbody>
-                </table>
-            </div>
+                        <div class="section">
+                            <p class="section-title">Status Breakdown</p>
+                            <table class="print-table">
+                                <thead><tr><th>Status</th><th>Count</th></tr></thead>
+                                <tbody>
+                                <?php if (!$statusRows): ?>
+                                    <tr><td colspan="2" class="muted">No data.</td></tr>
+                                <?php else: foreach ($statusRows as $r): ?>
+                                    <tr>
+                                        <td><?php echo nfa_escape(ucfirst((string)($r['status'] ?? ''))); ?></td>
+                                        <td><?php echo $fmtInt($r['count'] ?? 0); ?></td>
+                                    </tr>
+                                <?php endforeach; endif; ?>
+                                </tbody>
+                            </table>
+                        </div>
 
-            <div class="section">
-                <p class="section-title">Appointment List<?php echo $truncated ? ' (Truncated)' : ''; ?></p>
-                <?php if ($truncated): ?>
-                    <p class="muted" style="margin:0 0 8px;">Showing first <?php echo (int)$maxRows; ?> rows out of <?php echo $fmtInt($total); ?>. Narrow the filter range to print a smaller list.</p>
-                <?php endif; ?>
+                        <div class="section">
+                            <p class="section-title">Appointment List<?php echo $truncated ? ' (Truncated)' : ''; ?></p>
+                            <?php if ($truncated): ?>
+                                <p class="muted" style="margin:0 0 8px;">Showing first <?php echo (int)$maxRows; ?> rows out of <?php echo $fmtInt($total); ?>. Narrow the filter range to print a smaller list.</p>
+                            <?php endif; ?>
 
-                <table class="print-table">
-                    <thead>
-                        <tr>
-                            <th>Reference No</th>
-                            <th>Date</th>
-                            <th>Slot</th>
-                            <th>Farmer</th>
-                            <th>Type</th>
-                            <th>Volume</th>
-                            <th>Status</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                    <?php if (!$rows): ?>
-                        <tr><td colspan="7" class="muted">No appointments found for the selected filters.</td></tr>
-                    <?php else: foreach ($rows as $row): ?>
-                        <tr>
-                            <td><?php echo nfa_escape($row['reference_number'] ?? ''); ?></td>
-                            <td><?php echo nfa_escape($row['date'] ?? ''); ?></td>
-                            <td><?php echo nfa_escape(strtoupper((string)($row['time_slot'] ?? ''))); ?></td>
-                            <td><?php echo nfa_escape(trim((string)($row['first_name'] ?? '') . ' ' . (string)($row['last_name'] ?? ''))); ?></td>
-                            <td><?php echo nfa_escape($row['type_name'] ?? ''); ?></td>
-                            <td><?php echo $fmtNum($row['volume'] ?? 0); ?></td>
-                            <td><?php echo nfa_escape(ucfirst((string)($row['status'] ?? ''))); ?></td>
-                        </tr>
-                    <?php endforeach; endif; ?>
-                    </tbody>
-                </table>
-            </div>
+                            <table class="print-table">
+                                <thead>
+                                    <tr>
+                                        <th>Reference No</th>
+                                        <th>Date</th>
+                                        <th>Slot</th>
+                                        <th>Farmer</th>
+                                        <th>Type</th>
+                                        <th>Volume</th>
+                                        <th>Status</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                <?php if (!$rows): ?>
+                                    <tr><td colspan="7" class="muted">No appointments found for the selected filters.</td></tr>
+                                <?php else: foreach ($rows as $row): ?>
+                                    <tr>
+                                        <td><?php echo nfa_escape($row['reference_number'] ?? ''); ?></td>
+                                        <td><?php echo nfa_escape($row['date'] ?? ''); ?></td>
+                                        <td><?php echo nfa_escape(strtoupper((string)($row['time_slot'] ?? ''))); ?></td>
+                                        <td><?php echo nfa_escape(trim((string)($row['first_name'] ?? '') . ' ' . (string)($row['last_name'] ?? ''))); ?></td>
+                                        <td><?php echo nfa_escape($row['type_name'] ?? ''); ?></td>
+                                        <td><?php echo $fmtNum($row['volume'] ?? 0); ?></td>
+                                        <td><?php echo nfa_escape(ucfirst((string)($row['status'] ?? ''))); ?></td>
+                                    </tr>
+                                <?php endforeach; endif; ?>
+                                </tbody>
+                            </table>
+                        </div>
 
-            <div class="section">
-                <div class="sig-row sig-row--deep">
-                    <div class="sig-block">
-                        <div class="sig-caption">Prepared by:</div>
-                        <div class="sig-space"></div>
-                        <div class="sig-name"><?php echo nfa_escape($preparedBy['name'] !== '' ? $preparedBy['name'] : ''); ?></div>
-                        <div class="sig-line"></div>
-                        <div class="sig-position"><?php echo nfa_escape($preparedBy['position'] !== '' ? $preparedBy['position'] : ''); ?></div>
-                    </div>
-                    <div class="sig-block">
-                        <div class="sig-caption">Noted by / Approved by:</div>
-                        <div class="sig-space"></div>
-                        <div class="sig-name"><?php echo nfa_escape($approvedBy['name'] !== '' ? $approvedBy['name'] : ''); ?></div>
-                        <div class="sig-line"></div>
-                        <div class="sig-position"><?php echo nfa_escape($approvedBy['position'] !== '' ? $approvedBy['position'] : ''); ?></div>
-                    </div>
-                </div>
-            </div>
+                        <div class="section">
+                            <div class="sig-row sig-row--deep">
+                                <div class="sig-block">
+                                    <div class="sig-caption">Prepared by:</div>
+                                    <div class="sig-space"></div>
+                                    <div class="sig-name"><?php echo nfa_escape($preparedBy['name'] !== '' ? $preparedBy['name'] : ''); ?></div>
+                                    <div class="sig-line"></div>
+                                    <div class="sig-position"><?php echo nfa_escape($preparedBy['position'] !== '' ? $preparedBy['position'] : ''); ?></div>
+                                </div>
+                                <div class="sig-block">
+                                    <div class="sig-caption">Noted by / Approved by:</div>
+                                    <div class="sig-space"></div>
+                                    <div class="sig-name"><?php echo nfa_escape($approvedBy['name'] !== '' ? $approvedBy['name'] : ''); ?></div>
+                                    <div class="sig-line"></div>
+                                    <div class="sig-position"><?php echo nfa_escape($approvedBy['position'] !== '' ? $approvedBy['position'] : ''); ?></div>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </td>
             </tr>
@@ -304,20 +318,31 @@ $fmtNum = fn($n) => number_format((float)$n, 0);
         </tfoot>
     </table>
 
-    <script>
-        function nfaPrintBack() {
-            try {
-                window.close();
-                // If the browser blocks close, fall back.
-                setTimeout(function () {
-                    if (!document.hidden) {
-                        window.location.href = 'reports.php';
-                    }
-                }, 120);
-            } catch (e) {
-                window.location.href = 'reports.php';
+    <?php if (!$download): ?>
+        <script>
+            function nfaPrintBack() {
+                try {
+                    window.close();
+                    setTimeout(function () {
+                        if (!document.hidden) {
+                            window.location.href = 'reports.php';
+                        }
+                    }, 120);
+                } catch (e) {
+                    window.location.href = 'reports.php';
+                }
             }
-        }
-    </script>
+
+            function nfaDownload() {
+                try {
+                    const url = new URL(window.location.href);
+                    url.searchParams.set('download', '1');
+                    window.location.href = url.toString();
+                } catch (e) {
+                    window.location.href = 'reports_print.php?download=1';
+                }
+            }
+        </script>
+    <?php endif; ?>
 </body>
 </html>

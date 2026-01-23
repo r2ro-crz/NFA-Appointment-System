@@ -54,8 +54,22 @@ $inventory = (float)($cap['inventory'] ?? 0);
 $available = max(0, $warehouse_capacity - $inventory);
 $percent = $warehouse_capacity > 0 ? ($inventory / $warehouse_capacity) * 100 : 0;
 
-// Notifications (same behavior as other processor pages)
-$notif_stmt = $pdo->prepare("SELECT appointment_id, first_name, last_name, status, date, time_slot, volume, is_read FROM appointments WHERE branch_id = ? AND status IN ('pending', 'cancelled') ORDER BY appointment_id DESC LIMIT 10");
+// Notifications (shared across processor pages)
+$has_notif_deleted = false;
+try {
+    $col = $pdo->query("SHOW COLUMNS FROM appointments LIKE 'notif_deleted'")->fetch(PDO::FETCH_ASSOC);
+    $has_notif_deleted = !empty($col);
+} catch (PDOException $e) {
+    $has_notif_deleted = false;
+}
+
+$notif_sql = "SELECT appointment_id, first_name, last_name, status, date, time_slot, volume, is_read FROM appointments WHERE branch_id = ? AND status IN ('pending', 'cancelled')";
+if ($has_notif_deleted) {
+    $notif_sql .= " AND (notif_deleted IS NULL OR notif_deleted = 0)";
+}
+$notif_sql .= " ORDER BY appointment_id DESC LIMIT 10";
+
+$notif_stmt = $pdo->prepare($notif_sql);
 $notif_stmt->execute([$branch_id]);
 $notifications = $notif_stmt->fetchAll(PDO::FETCH_ASSOC);
 $new_count = count(array_filter($notifications, fn($n) => (empty($n['is_read']) || $n['is_read'] == 0)));
@@ -173,6 +187,9 @@ $new_count = count(array_filter($notifications, fn($n) => (empty($n['is_read']) 
                                             <input class="notif-checkbox" type="checkbox" <?php echo $unread ? '' : 'checked'; ?> aria-label="Toggle read status">
                                             <span class="notif-check-ui" aria-hidden="true"></span>
                                         </label>
+                                        <span class="notif-delete" role="button" tabindex="0" title="Delete notification" aria-label="Delete notification">
+                                            <i class="fas fa-trash"></i>
+                                        </span>
                                     </div>
                                 </a>
                             <?php endforeach; ?>
@@ -207,8 +224,22 @@ $new_count = count(array_filter($notifications, fn($n) => (empty($n['is_read']) 
                         </div>
                     </div>
                     <div class="user-dropdown-menu">
-                        <a href="profile.php" class="dropdown-item"><i class="fas fa-user-cog"></i> My Profile</a>
-                        <a href="settings.php" class="dropdown-item"><i class="fas fa-cog"></i> Settings</a>
+                        <a href="profile.php" class="dropdown-item">
+                            <i class="fas fa-user-cog"></i>
+                            <span class="dropdown-item-content">
+                                <span class="dropdown-item-title">My Profile</span>
+                                <span class="dropdown-item-desc">View and update your account</span>
+                            </span>
+                            <i class="fas fa-chevron-right dropdown-item-arrow"></i>
+                        </a>
+                        <a href="settings.php" class="dropdown-item">
+                            <i class="fas fa-cog"></i>
+                            <span class="dropdown-item-content">
+                                <span class="dropdown-item-title">Settings</span>
+                                <span class="dropdown-item-desc">Preferences and appearance</span>
+                            </span>
+                            <i class="fas fa-chevron-right dropdown-item-arrow"></i>
+                        </a>
                         <div class="dropdown-divider"></div>
                         <a href="login.php" class="dropdown-item logout"><i class="fas fa-sign-out-alt"></i> Logout</a>
                     </div>

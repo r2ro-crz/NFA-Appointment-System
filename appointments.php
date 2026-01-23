@@ -90,11 +90,39 @@ foreach ($calendar_stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
 // If a specific date is selected, load its appointments
 $appointmentsByDate = [];
 if ($selectedDate) {
-    $appt_stmt = $pdo->prepare("SELECT a.*, r.region_name, b.branch_name, f.type_name
+    // Optional: include cancellation details if the log table exists
+    $hasCancelLog = false;
+    try {
+        $t = $pdo->query("SHOW TABLES LIKE 'appointment_cancellations'");
+        $hasCancelLog = $t && $t->fetchColumn();
+    } catch (Exception $e) {
+        $hasCancelLog = false;
+    }
+
+    $cancelSelect = '';
+    $cancelJoin = '';
+    if ($hasCancelLog) {
+        $cancelSelect = ", ac.reason_code AS cancel_reason_code, ac.reason_detail AS cancel_reason_detail, ac.cancelled_at AS cancel_cancelled_at";
+        $cancelJoin = "
+        LEFT JOIN (
+            SELECT c1.appointment_id, c1.reason_code, c1.reason_detail, c1.cancelled_at
+            FROM appointment_cancellations c1
+            INNER JOIN (
+                SELECT appointment_id, MAX(cancellation_id) AS max_id
+                FROM appointment_cancellations
+                GROUP BY appointment_id
+            ) c2
+                ON c1.appointment_id = c2.appointment_id
+               AND c1.cancellation_id = c2.max_id
+        ) ac ON ac.appointment_id = a.appointment_id";
+    }
+
+    $appt_stmt = $pdo->prepare("SELECT a.*, r.region_name, b.branch_name, f.type_name{$cancelSelect}
         FROM appointments a
         JOIN regions r ON a.region_id = r.region_id
         JOIN branch b ON a.branch_id = b.branch_id
         LEFT JOIN farmer_type f ON a.farmer_type_id = f.farmer_type_id
+        {$cancelJoin}
         WHERE a.branch_id = ? AND a.date = ?
         ORDER BY FIELD(a.time_slot, 'AM', 'PM'), a.appointment_id");
     $appt_stmt->execute([$branch_id, $selectedDate]);
@@ -119,7 +147,21 @@ $monthName = date('F', strtotime($firstOfMonth));
 $today = date('Y-m-d');
 
 // Notifications (same behavior as processor dashboard)
-$notif_stmt = $pdo->prepare("SELECT appointment_id, first_name, last_name, status, date, time_slot, volume, is_read FROM appointments WHERE branch_id = ? AND status IN ('pending', 'cancelled') ORDER BY appointment_id DESC LIMIT 10");
+$has_notif_deleted = false;
+try {
+    $col = $pdo->query("SHOW COLUMNS FROM appointments LIKE 'notif_deleted'")->fetch(PDO::FETCH_ASSOC);
+    $has_notif_deleted = !empty($col);
+} catch (PDOException $e) {
+    $has_notif_deleted = false;
+}
+
+$notif_sql = "SELECT appointment_id, first_name, last_name, status, date, time_slot, volume, is_read FROM appointments WHERE branch_id = ? AND status IN ('pending', 'cancelled')";
+if ($has_notif_deleted) {
+    $notif_sql .= " AND (notif_deleted IS NULL OR notif_deleted = 0)";
+}
+$notif_sql .= " ORDER BY appointment_id DESC LIMIT 10";
+
+$notif_stmt = $pdo->prepare($notif_sql);
 $notif_stmt->execute([$branch_id]);
 $notifications = $notif_stmt->fetchAll(PDO::FETCH_ASSOC);
 $new_count = count(array_filter($notifications, fn($n) => (empty($n['is_read']) || $n['is_read'] == 0)));
@@ -225,6 +267,9 @@ $new_count = count(array_filter($notifications, fn($n) => (empty($n['is_read']) 
                                             <input class="notif-checkbox" type="checkbox" <?php echo $unread ? '' : 'checked'; ?> aria-label="Toggle read status">
                                             <span class="notif-check-ui" aria-hidden="true"></span>
                                         </label>
+                                        <span class="notif-delete" role="button" tabindex="0" title="Delete notification" aria-label="Delete notification">
+                                            <i class="fas fa-trash"></i>
+                                        </span>
                                     </div>
                                 </a>
                             <?php endforeach; ?>
@@ -264,10 +309,20 @@ $new_count = count(array_filter($notifications, fn($n) => (empty($n['is_read']) 
                     </div>
                     <div class="user-dropdown-menu">
                         <a href="profile.php" class="dropdown-item">
-                            <i class="fas fa-user-cog"></i> My Profile
+                            <i class="fas fa-user-cog"></i>
+                            <span class="dropdown-item-content">
+                                <span class="dropdown-item-title">My Profile</span>
+                                <span class="dropdown-item-desc">View and update your account</span>
+                            </span>
+                            <i class="fas fa-chevron-right dropdown-item-arrow"></i>
                         </a>
                         <a href="settings.php" class="dropdown-item">
-                            <i class="fas fa-cog"></i> Settings
+                            <i class="fas fa-cog"></i>
+                            <span class="dropdown-item-content">
+                                <span class="dropdown-item-title">Settings</span>
+                                <span class="dropdown-item-desc">Preferences and appearance</span>
+                            </span>
+                            <i class="fas fa-chevron-right dropdown-item-arrow"></i>
                         </a>
                         <div class="dropdown-divider"></div>
                         <a href="login.php" class="dropdown-item logout">
@@ -378,6 +433,17 @@ $new_count = count(array_filter($notifications, fn($n) => (empty($n['is_read']) 
                             $slotLabel = strtoupper($appt['time_slot']) === 'PM' ? 'Afternoon' : 'Morning';
                             $isHighlight = isset($highlightId) && $highlightId && (int)$appt['appointment_id'] === $highlightId;
 
+                            $modeRaw = strtolower((string)($appt['mode'] ?? 'appointment'));
+                            $modeLabel = ($modeRaw === 'walk-in' || $modeRaw === 'walkin') ? 'Walk-in' : 'Appointment';
+                            $modeClass = ($modeLabel === 'Walk-in') ? 'mode-walk-in' : 'mode-appointment';
+                            $modeIcon = ($modeLabel === 'Walk-in') ? 'fa-person-walking' : 'fa-calendar-check';
+
+                            $cancelReasonCode = (string)($appt['cancel_reason_code'] ?? '');
+                            $cancelReasonDetail = (string)($appt['cancel_reason_detail'] ?? '');
+                            $cancelReasonText = trim($cancelReasonCode . ($cancelReasonDetail !== '' ? (': ' . $cancelReasonDetail) : ''));
+                            $cancelledAtRaw = (string)($appt['cancel_cancelled_at'] ?? '');
+                            $cancelledAtLabel = $cancelledAtRaw !== '' ? date('M d, Y h:i A', strtotime($cancelledAtRaw)) : '';
+
                             $statusRaw = isset($appt['status']) ? strtolower((string)$appt['status']) : '';
                             $statusLabel = $statusRaw !== '' ? ucfirst($statusRaw) : 'Unknown';
                             $statusClass = 'status-' . preg_replace('/[^a-z0-9\-]/', '', $statusRaw);
@@ -394,6 +460,9 @@ $new_count = count(array_filter($notifications, fn($n) => (empty($n['is_read']) 
                                     <span class="appointment-date"><i class="fas fa-calendar"></i> <?php echo date('M d, Y', strtotime($appt['date'])); ?></span>
                                     <span class="appointment-slot <?php echo strtoupper($appt['time_slot']) === 'PM' ? 'pm' : 'am'; ?>">
                                         <i class="fas fa-clock"></i> <?php echo $slotLabel; ?>
+                                    </span>
+                                    <span class="appointment-mode <?php echo htmlspecialchars($modeClass); ?>">
+                                        <i class="fas <?php echo htmlspecialchars($modeIcon); ?>"></i> <?php echo htmlspecialchars($modeLabel); ?>
                                     </span>
                                     <span class="appointment-volume"><i class="fas fa-weight-hanging"></i> <?php echo number_format($appt['volume']); ?> bags</span>
                                 </div>
@@ -415,6 +484,9 @@ $new_count = count(array_filter($notifications, fn($n) => (empty($n['is_read']) 
                                         data-volume="<?php echo number_format($appt['volume']); ?>"
                                         data-volume-raw="<?php echo (float)$appt['volume']; ?>"
                                         data-status="<?php echo htmlspecialchars($appt['status'], ENT_QUOTES); ?>"
+                                        data-mode="<?php echo htmlspecialchars($modeLabel, ENT_QUOTES); ?>"
+                                        data-cancel-reason="<?php echo htmlspecialchars($cancelReasonText, ENT_QUOTES); ?>"
+                                        data-cancelled-at-label="<?php echo htmlspecialchars($cancelledAtLabel, ENT_QUOTES); ?>"
                                     >
                                         View Details
                                     </button>
@@ -438,8 +510,14 @@ $new_count = count(array_filter($notifications, fn($n) => (empty($n['is_read']) 
                             <h3>Appointment Details</h3>
                             <p><strong>Date:</strong> <span id="modalDate"></span></p>
                             <p><strong>Time Slot:</strong> <span id="modalSlot"></span></p>
+                            <p><strong>Mode:</strong> <span id="modalMode"></span></p>
                             <p><strong>Volume:</strong> <span id="modalVolume"></span> bags</p>
                             <p><strong>Status:</strong> <span id="modalStatus"></span></p>
+
+                            <div id="modalCancellation" style="display:none; margin-top: 0.75rem;">
+                                <p><strong>Cancelled On:</strong> <span id="modalCancelledAt"></span></p>
+                                <p><strong>Cancellation Reason:</strong> <span id="modalCancelReason"></span></p>
+                            </div>
                         </div>
                         <div class="modal-section">
                             <h3>Farmer Information</h3>
@@ -519,7 +597,7 @@ $new_count = count(array_filter($notifications, fn($n) => (empty($n['is_read']) 
             </div>
         <?php endif; ?>
     </div>
-
+    
     <script>
         window.userId = <?php echo json_encode((int)($user_id ?? 0)); ?>;
         window.branchId = <?php echo json_encode((int)$branch_id); ?>;
