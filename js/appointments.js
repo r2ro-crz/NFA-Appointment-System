@@ -33,6 +33,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const receiveModal = document.getElementById('receiveModal');
     const receiveClose = document.getElementById('receiveClose');
     const receiveInput = document.getElementById('receiveVolume');
+    const receivePriceInput = document.getElementById('receivePrice');
     const receiveSubmit = document.getElementById('receiveSubmit');
 
     // Reschedule modal elements
@@ -55,6 +56,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let currentVolume = 0;
     let currentStatus = '';
     let currentDateIso = '';
+    let currentTimeSlot = ''; // 'AM' | 'PM'
 
     let reschedYear = null;
     let reschedMonth = null; // 1-12
@@ -93,6 +95,16 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     };
 
+    const getNowSlot = () => {
+        const now = new Date();
+        const minutes = now.getHours() * 60 + now.getMinutes();
+        const inAm = minutes >= (8 * 60) && minutes < (12 * 60);
+        const inPm = minutes >= (13 * 60) && minutes < (17 * 60);
+        if (inAm) return 'AM';
+        if (inPm) return 'PM';
+        return '';
+    };
+
     const formatDateYmd = (date) => {
         if (!date) return '';
         const d = new Date(date);
@@ -127,6 +139,13 @@ document.addEventListener('DOMContentLoaded', () => {
         currentVolume = parseFloat(btn.dataset.volumeRaw || '0') || 0;
         currentStatus = btn.dataset.status || '';
         currentDateIso = btn.dataset.dateIso || '';
+        currentTimeSlot = (btn.dataset.slotRaw || '').toString().trim().toUpperCase();
+
+        if (currentTimeSlot !== 'AM' && currentTimeSlot !== 'PM') {
+            // Back-compat: infer from human label if slotRaw wasn't provided
+            const slotLabel = (btn.dataset.slot || '').toString().toLowerCase();
+            currentTimeSlot = slotLabel.includes('after') || slotLabel === 'pm' ? 'PM' : 'AM';
+        }
 
         modalName.textContent = btn.dataset.name || '';
         modalRef.textContent = `Reference: ${btn.dataset.reference || ''}`;
@@ -323,6 +342,9 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
         receiveInput.value = currentVolume || 0;
+        if (receivePriceInput) {
+            receivePriceInput.value = '';
+        }
         if (receiveModal) {
             receiveModal.style.display = 'flex';
         }
@@ -357,6 +379,18 @@ document.addEventListener('DOMContentLoaded', () => {
                 notify('Rescheduled appointments must be confirmed by the farmer first before accepting delivery.', 'warning');
                 return;
             }
+
+            // Rule: delivery completion must match today's date AND the current time slot window.
+            // AM window: 8:00–12:00, PM window: 1:00–5:00.
+            const todayIso = formatDateYmd(new Date());
+            const nowSlot = getNowSlot();
+            const apptSlot = (currentTimeSlot || '').toString().toUpperCase();
+            if (!currentDateIso || currentDateIso !== todayIso || !nowSlot || nowSlot !== apptSlot) {
+                const apptDateLabel = currentDateIso ? new Date(currentDateIso + 'T00:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }) : '—';
+                const apptSlotLabel = apptSlot === 'PM' ? 'Afternoon (1:00 PM – 5:00 PM)' : 'Morning (8:00 AM – 12:00 NN)';
+                notify(`Cannot submit delivery. This appointment can only be completed on ${apptDateLabel} during the ${apptSlotLabel} window.`, 'warning');
+                return;
+            }
             const newVolume = parseFloat(receiveInput?.value ?? '');
             if (Number.isNaN(newVolume) || newVolume < 0) {
                 if (typeof showToast === 'function') {
@@ -368,10 +402,22 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             }
 
+            const priceRaw = (receivePriceInput?.value ?? '').toString().trim();
+            const price = priceRaw === '' ? NaN : parseFloat(priceRaw);
+            if (Number.isNaN(price) || price < 0) {
+                if (typeof showToast === 'function') {
+                    showToast('Please enter a valid price amount.', 'warning');
+                } else {
+                    alert('Please enter a valid price amount.');
+                }
+                receivePriceInput && receivePriceInput.focus();
+                return;
+            }
+
             const ok = (typeof confirmDialog === 'function')
                 ? await confirmDialog({
                     title: 'Submit Delivery',
-                    message: `Record ${newVolume.toLocaleString()} bag(s) received and mark this appointment as Completed?`,
+                    message: `Record ${newVolume.toLocaleString()} bag(s) received with price ₱${price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} and mark this appointment as Completed?`,
                     confirmText: 'Yes, Submit',
                     cancelText: 'Cancel',
                     tone: 'primary'
@@ -383,7 +429,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 try {
                     const result = await postJson('completeAppointment', {
                         appointment_id: currentAppointmentId,
-                        volume: newVolume
+                        volume: newVolume,
+                        price: price
                     });
                     if (result && result.success) {
                     // Update local state and UI without reloading the page
@@ -426,6 +473,17 @@ document.addEventListener('DOMContentLoaded', () => {
                     closeReceiveModal();
                     if (typeof showToast === 'function') {
                         showToast('Delivery recorded successfully.', 'success');
+                    }
+
+                    // Generate receipt in a new tab (same behavior as other print pages)
+                    try {
+                        const receiptUrl = `delivery_receipt_print.php?appointment_id=${encodeURIComponent(currentAppointmentId)}&auto=1`;
+                        const w = window.open(receiptUrl, '_blank');
+                        if (w) {
+                            try { w.focus(); } catch (e) {}
+                        }
+                    } catch (e) {
+                        // ignore
                     }
 
                     broadcastAndReload('completed');
@@ -601,8 +659,15 @@ document.addEventListener('DOMContentLoaded', () => {
         selectedSlot = null;
         reschedSubmit.disabled = true;
 
-        const enableAm = info && info.am_remaining > 0;
-        const enablePm = info && info.pm_remaining > 0;
+        let enableAm = info && info.am_remaining > 0;
+        let enablePm = info && info.pm_remaining > 0;
+
+        // Rule: cannot reschedule into the exact same slot as the current appointment.
+        // Same day but other slot is allowed.
+        if (selectedReschedDate && currentDateIso && selectedReschedDate === currentDateIso) {
+            if (currentTimeSlot === 'AM') enableAm = false;
+            if (currentTimeSlot === 'PM') enablePm = false;
+        }
 
         slotAm.disabled = !enableAm;
         slotPm.disabled = !enablePm;
@@ -614,6 +679,10 @@ document.addEventListener('DOMContentLoaded', () => {
     if (slotAm) {
         slotAm.addEventListener('click', () => {
             if (slotAm.disabled || !selectedReschedDate) return;
+            if (selectedReschedDate === currentDateIso && currentTimeSlot === 'AM') {
+                notify('This appointment is already scheduled for this date (Morning). Choose Afternoon instead.', 'warning');
+                return;
+            }
             selectedSlot = 'AM';
             slotAm.classList.add('selected');
             slotPm.classList.remove('selected');
@@ -624,6 +693,10 @@ document.addEventListener('DOMContentLoaded', () => {
     if (slotPm) {
         slotPm.addEventListener('click', () => {
             if (slotPm.disabled || !selectedReschedDate) return;
+            if (selectedReschedDate === currentDateIso && currentTimeSlot === 'PM') {
+                notify('This appointment is already scheduled for this date (Afternoon). Choose Morning instead.', 'warning');
+                return;
+            }
             selectedSlot = 'PM';
             slotPm.classList.add('selected');
             slotAm.classList.remove('selected');
@@ -661,6 +734,12 @@ document.addEventListener('DOMContentLoaded', () => {
     if (reschedSubmit) {
         reschedSubmit.addEventListener('click', async () => {
             if (!currentAppointmentId || !selectedReschedDate || !selectedSlot) return;
+
+            if (selectedReschedDate === currentDateIso && selectedSlot === currentTimeSlot) {
+                notify('Please choose a different time slot. Rescheduling to the same date and slot is not allowed.', 'warning');
+                return;
+            }
+
             const statusLower = String(currentStatus || '').toLowerCase();
             if (statusLower === 'cancelled' || statusLower === 'canceled') {
                 if (typeof showToast === 'function') showToast('Cancelled appointments cannot be rescheduled.', 'warning');

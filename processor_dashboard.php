@@ -2,6 +2,12 @@
 session_start();
 require_once 'php_helper/db_config.php';
 
+// Prevent caching of protected pages (helps prevent back-button dashboard access after logout)
+header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+header('Cache-Control: post-check=0, pre-check=0', false);
+header('Pragma: no-cache');
+header('Expires: 0');
+
 if (!isset($_SESSION["loggedin"]) || $_SESSION["user_type"] !== 'Processor') {
     header("location: login.php");
     exit;
@@ -363,7 +369,7 @@ for ($i = 6; $i >= 0; $i--) {
                             <i class="fas fa-chevron-right dropdown-item-arrow"></i>
                         </a>
                         <div class="dropdown-divider"></div>
-                        <a href="login.php" class="dropdown-item logout">
+                        <a href="logout.php" class="dropdown-item logout">
                             <i class="fas fa-sign-out-alt"></i> Logout
                         </a>
                     </div>

@@ -2,6 +2,12 @@
 session_start();
 require_once 'php_helper/db_config.php';
 
+// Prevent caching of protected pages (helps prevent back-button access after logout)
+header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+header('Cache-Control: post-check=0, pre-check=0', false);
+header('Pragma: no-cache');
+header('Expires: 0');
+
 if (!isset($_SESSION['loggedin'])) {
     header('location: login.php');
     exit;
@@ -47,6 +53,11 @@ $branch_name = (string)($u['branch_name'] ?? '');
 $region_name = (string)($u['region_name'] ?? '');
 
 $initials = strtoupper(substr($first_name, 0, 1) . substr($last_name, 0, 1));
+
+$dashboardHref = 'processor_dashboard.php';
+if (strcasecmp($role, 'Admin') === 0 || strcasecmp($user_type, 'Admin') === 0) {
+    $dashboardHref = 'admin_dashboard.php';
+}
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -102,7 +113,7 @@ $initials = strtoupper(substr($first_name, 0, 1) . substr($last_name, 0, 1));
                             <i class="fas fa-chevron-right dropdown-item-arrow"></i>
                         </a>
                         <div class="dropdown-divider"></div>
-                        <a href="login.php" class="dropdown-item logout">
+                        <a href="logout.php" class="dropdown-item logout">
                             <i class="fas fa-sign-out-alt"></i> Logout
                         </a>
                     </div>
@@ -118,7 +129,7 @@ $initials = strtoupper(substr($first_name, 0, 1) . substr($last_name, 0, 1));
                 <p class="profile-subtitle">Keep your details up to date for secure access and accurate records.</p>
             </div>
             <div class="profile-hero-right">
-                <a class="btn-view-details btn-inline-secondary" href="processor_dashboard.php"><i class="fas fa-arrow-left"></i> Back to Dashboard</a>
+                <a class="btn-view-details btn-inline-secondary" href="<?php echo htmlspecialchars($dashboardHref); ?>"><i class="fas fa-arrow-left"></i> Back to Dashboard</a>
             </div>
         </div>
 

@@ -1781,7 +1781,8 @@ body {
     display: none;
     justify-content: center;
     align-items: center;
-    z-index: 1000;
+    /* Must be above modals/popups across the app */
+    z-index: 100000;
     backdrop-filter: blur(4px);
 }
 

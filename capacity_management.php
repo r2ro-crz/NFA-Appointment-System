@@ -122,10 +122,6 @@ $new_count = count(array_filter($notifications, fn($n) => (empty($n['is_read']) 
                     <i class="fas fa-chart-bar"></i>
                     <span>Reports</span>
                 </a>
-                <a href="farmers.php" class="nav-link">
-                    <i class="fas fa-users"></i>
-                    <span>Farmers</span>
-                </a>
             </div>
         </div>
 
@@ -241,7 +237,7 @@ $new_count = count(array_filter($notifications, fn($n) => (empty($n['is_read']) 
                             <i class="fas fa-chevron-right dropdown-item-arrow"></i>
                         </a>
                         <div class="dropdown-divider"></div>
-                        <a href="login.php" class="dropdown-item logout"><i class="fas fa-sign-out-alt"></i> Logout</a>
+                        <a href="logout.php" class="dropdown-item logout"><i class="fas fa-sign-out-alt"></i> Logout</a>
                     </div>
                 </div>
             </div>
@@ -409,7 +405,7 @@ $new_count = count(array_filter($notifications, fn($n) => (empty($n['is_read']) 
                         <div class="cap-validation" id="capValidation" role="status" aria-live="polite"></div>
                     </div>
 
-                    <div class="modal-section">
+                    <div class="modal-section cap-modal-actions">
                         <button class="btn-view-details btn-inline-primary" id="capSubmit">Save Changes</button>
                         <button class="btn-view-details btn-inline-secondary" id="capCancel">Cancel</button>
                     </div>

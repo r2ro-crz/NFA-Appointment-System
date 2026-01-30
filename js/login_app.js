@@ -287,7 +287,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Prevent transient banners from reappearing on refresh
     try {
         const url = new URL(window.location.href);
-        const transientKeys = ['registered', 'error', 'pending', 'locked'];
+        const transientKeys = ['registered', 'error', 'pending', 'locked', 'rejected', 'deactivated'];
         const hadTransient = transientKeys.some(k => url.searchParams.has(k));
         if (hadTransient) {
             transientKeys.forEach(k => url.searchParams.delete(k));

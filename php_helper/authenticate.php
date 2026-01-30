@@ -84,6 +84,110 @@ function send_password_changed_email(string $toEmail, string $toName): void {
     $mail->send();
 }
 
+function log_activity_best_effort(PDO $pdo, int $userId, string $action): void {
+    try {
+        if ($userId <= 0) return;
+        $action = trim($action);
+        if ($action === '') return;
+        $stmt = $pdo->prepare('INSERT INTO activity_logs (user_id, action) VALUES (?, ?)');
+        $stmt->execute([$userId, $action]);
+    } catch (PDOException $e) {
+        // best-effort
+    }
+}
+
+function col_exists(PDO $pdo, string $table, string $col): bool {
+    try {
+        $stmt = $pdo->prepare("SHOW COLUMNS FROM `{$table}` LIKE ?");
+        $stmt->execute([$col]);
+        return (bool)$stmt->fetch(PDO::FETCH_ASSOC);
+    } catch (PDOException $e) {
+        return false;
+    }
+}
+
+function nfa_get_client_ip(): string {
+    $candidates = [
+        $_SERVER['HTTP_CLIENT_IP'] ?? '',
+        $_SERVER['HTTP_X_FORWARDED_FOR'] ?? '',
+        $_SERVER['REMOTE_ADDR'] ?? '',
+    ];
+    foreach ($candidates as $ip) {
+        $ip = trim((string)$ip);
+        if ($ip === '') continue;
+        // X-Forwarded-For can contain multiple IPs
+        if (str_contains($ip, ',')) {
+            $ip = trim(explode(',', $ip)[0] ?? '');
+        }
+        if ($ip !== '') return $ip;
+    }
+    return '';
+}
+
+function nfa_ensure_login_attempts_schema(PDO $pdo): void {
+    static $ran = false;
+    if ($ran) return;
+    $ran = true;
+
+    try {
+        $pdo->exec(
+            "CREATE TABLE IF NOT EXISTS login_attempts (\n" .
+            "  attempt_id INT(11) NOT NULL AUTO_INCREMENT,\n" .
+            "  occurred_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,\n" .
+            "  attempted_username VARCHAR(255) NOT NULL,\n" .
+            "  user_id INT(11) NULL,\n" .
+            "  user_type VARCHAR(50) NULL,\n" .
+            "  account_status VARCHAR(30) NULL,\n" .
+            "  is_active TINYINT(1) NULL,\n" .
+            "  reason_code VARCHAR(60) NOT NULL,\n" .
+            "  ip_address VARCHAR(64) NULL,\n" .
+            "  user_agent VARCHAR(255) NULL,\n" .
+            "  PRIMARY KEY (attempt_id),\n" .
+            "  KEY idx_occurred_at (occurred_at),\n" .
+            "  KEY idx_user_id (user_id),\n" .
+            "  KEY idx_attempted_username (attempted_username)\n" .
+            ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"
+        );
+    } catch (PDOException $e) {
+        // best-effort
+    }
+}
+
+function nfa_log_login_attempt_best_effort(PDO $pdo, string $attemptedUsername, ?array $userRow, string $reasonCode): void {
+    try {
+        $attemptedUsername = trim($attemptedUsername);
+        if ($attemptedUsername === '') return;
+
+        nfa_ensure_login_attempts_schema($pdo);
+
+        $userId = $userRow ? (int)($userRow['user_id'] ?? 0) : 0;
+        $userType = $userRow ? trim((string)($userRow['user_type'] ?? '')) : '';
+        $status = $userRow ? trim((string)($userRow['status'] ?? '')) : '';
+        $isActive = $userRow ? (int)($userRow['is_active'] ?? 1) : null;
+
+        $ip = nfa_get_client_ip();
+        $ua = trim((string)($_SERVER['HTTP_USER_AGENT'] ?? ''));
+        if (strlen($ua) > 255) $ua = substr($ua, 0, 255);
+
+        $stmt = $pdo->prepare(
+            'INSERT INTO login_attempts (attempted_username, user_id, user_type, account_status, is_active, reason_code, ip_address, user_agent) ' .
+            'VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+        );
+        $stmt->execute([
+            $attemptedUsername,
+            $userId > 0 ? $userId : null,
+            $userType !== '' ? $userType : null,
+            $status !== '' ? $status : null,
+            $isActive,
+            trim($reasonCode) !== '' ? trim($reasonCode) : 'unknown',
+            $ip !== '' ? $ip : null,
+            $ua !== '' ? $ua : null,
+        ]);
+    } catch (PDOException $e) {
+        // best-effort
+    }
+}
+
 function validate_new_password(string $password): array {
     $errors = [];
     if (strlen($password) < 8) {
@@ -329,11 +433,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         $_SESSION["user_type"] = (string)$pending['user_type'];
         $_SESSION["branch_id"] = (int)$pending['branch_id'];
 
+        // Record login activity for Processor accounts (Admin monitoring scope)
+        try {
+            if (($_SESSION['user_type'] ?? '') === 'Processor') {
+                $uid = (int)($_SESSION['user_id'] ?? $_SESSION['id'] ?? 0);
+                log_activity_best_effort($pdo, $uid, 'Login');
+            }
+        } catch (Exception $e) {
+            // best-effort
+        }
+
         clear_pending_2fa();
 
         // IMPORTANT: Return paths relative to login.php (project root), not relative to php_helper/
         // so the browser stays under /Appointment_System/.
-        $redirect = ($_SESSION["user_type"] === 'Admin') ? 'admin.html' : 'processor_dashboard.php';
+        $redirect = ($_SESSION["user_type"] === 'Admin') ? 'admin_dashboard.php' : 'processor_dashboard.php';
         json_response(['success' => true, 'redirect' => $redirect]);
     }
 
@@ -379,13 +493,18 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     
     // Simple validation check
     if (empty($username) || empty($password)) {
+        nfa_log_login_attempt_best_effort($pdo, (string)$username, null, 'missing_fields');
         // redirect back to top-level login.php (authenticate.php is inside php_helper)
         header("Location: ../login.php?error=1"); 
         exit;
     }
 
     // SQL to fetch user data and the hashed password
-    $sql = "SELECT user_id, username, password_hash, user_type, branch_id, email_address, status FROM users WHERE username = :username";
+    // NOTE: `is_active` may not exist on older schemas.
+    $selectIsActive = col_exists($pdo, 'users', 'is_active')
+        ? 'COALESCE(is_active, 1) AS is_active'
+        : '1 AS is_active';
+    $sql = "SELECT user_id, username, password_hash, user_type, branch_id, email_address, status, {$selectIsActive} FROM users WHERE username = :username";
     
     if($stmt = $pdo->prepare($sql)) {
         $stmt->bindParam(":username", $param_username, PDO::PARAM_STR);
@@ -400,8 +519,23 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                 if (password_verify($password, $hashed_password)) {
 
                     $status = trim((string)($row['status'] ?? ''));
+                    $isActive = (int)($row['is_active'] ?? 1);
+
+                    if (strcasecmp($status, 'Rejected') === 0) {
+                        nfa_log_login_attempt_best_effort($pdo, (string)$username, $row, 'rejected_account');
+                        header("Location: ../login.php?rejected=1");
+                        exit;
+                    }
+
+                    if ($isActive === 0) {
+                        nfa_log_login_attempt_best_effort($pdo, (string)$username, $row, 'deactivated_account');
+                        header("Location: ../login.php?deactivated=1");
+                        exit;
+                    }
+
                     if (strcasecmp($status, 'Approved') !== 0) {
                         // Only approved accounts can login
+                        nfa_log_login_attempt_best_effort($pdo, (string)$username, $row, 'pending_account');
                         header("Location: ../login.php?pending=1");
                         exit;
                     }
@@ -409,6 +543,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                     $email = trim((string)($row['email_address'] ?? ''));
                     if ($email === '') {
                         // Enforce 2FA only if email exists
+                        nfa_log_login_attempt_best_effort($pdo, (string)$username, $row, 'missing_email');
                         header("Location: ../login.php?error=1");
                         exit;
                     }
@@ -431,6 +566,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                         send_otp_email($email, (string)$row['username'], $otp);
                     } catch (Exception $e) {
                         clear_pending_2fa();
+                        nfa_log_login_attempt_best_effort($pdo, (string)$username, $row, 'otp_send_failed');
                         header("Location: ../login.php?error=1");
                         exit;
                     }
@@ -444,6 +580,19 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     }
     
     // Login failed (Invalid credentials)
+    try {
+        // Best-effort: if username exists, record the linked user_id for auditing
+        $u = null;
+        $stmt2 = $pdo->prepare("SELECT user_id, username, user_type, status, {$selectIsActive} FROM users WHERE username = :username LIMIT 1");
+        $stmt2->bindParam(":username", $param_username2, PDO::PARAM_STR);
+        $param_username2 = $username;
+        if ($stmt2->execute() && $stmt2->rowCount() === 1) {
+            $u = $stmt2->fetch(PDO::FETCH_ASSOC) ?: null;
+        }
+        nfa_log_login_attempt_best_effort($pdo, (string)$username, $u, 'invalid_credentials');
+    } catch (PDOException $e) {
+        // best-effort
+    }
     header("Location: ../login.php?error=1");
     exit;
 

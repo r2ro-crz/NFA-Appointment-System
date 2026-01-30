@@ -44,6 +44,7 @@ CREATE TABLE `appointments` (
   `appointment_id` int(11) NOT NULL,
   `region_id` int(11) NOT NULL,
   `branch_id` int(11) NOT NULL,
+  `date_submitted` datetime NOT NULL DEFAULT current_timestamp(),
   `date` date NOT NULL,
   `time_slot` varchar(255) NOT NULL,
   `farmer_id` varchar(255) NOT NULL,
@@ -55,10 +56,60 @@ CREATE TABLE `appointments` (
   `contact_number` varchar(255) NOT NULL,
   `gender` varchar(255) NOT NULL,
   `volume` double(10,2) NOT NULL,
+  `price` decimal(10,2) DEFAULT NULL,
   `farmer_type_id` int(11) NOT NULL,
   `reference_number` varchar(255) NOT NULL,
   `status` varchar(255) NOT NULL,
   `is_read` tinyint(4) NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+-- --------------------------------------------------------
+--
+-- Audit tables for appointment status checkpoints
+--
+
+CREATE TABLE `cancelled_appointments` (
+  `cancellation_id` int(11) NOT NULL,
+  `appointment_id` int(11) NOT NULL,
+  `reference_number` varchar(255) NOT NULL,
+  `reason_code` varchar(50) NOT NULL,
+  `reason_detail` text DEFAULT NULL,
+  `cancelled_at` datetime DEFAULT current_timestamp(),
+  `cancelled_by` int(11) DEFAULT NULL,
+  `source` varchar(30) DEFAULT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+CREATE TABLE `rescheduled_appointments` (
+  `reschedule_id` int(11) NOT NULL,
+  `appointment_id` int(11) NOT NULL,
+  `reference_number` varchar(255) NOT NULL,
+  `old_date` date DEFAULT NULL,
+  `old_time_slot` varchar(10) DEFAULT NULL,
+  `new_date` date NOT NULL,
+  `new_time_slot` varchar(10) NOT NULL,
+  `rescheduled_at` datetime DEFAULT current_timestamp(),
+  `rescheduled_by` int(11) DEFAULT NULL,
+  `source` varchar(30) DEFAULT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+CREATE TABLE `confirmed_appointments` (
+  `confirmation_id` int(11) NOT NULL,
+  `appointment_id` int(11) NOT NULL,
+  `reference_number` varchar(255) NOT NULL,
+  `confirmed_at` datetime DEFAULT current_timestamp(),
+  `confirmed_by` int(11) DEFAULT NULL,
+  `source` varchar(30) DEFAULT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+CREATE TABLE `completed_appointments` (
+  `completion_id` int(11) NOT NULL,
+  `appointment_id` int(11) NOT NULL,
+  `reference_number` varchar(255) NOT NULL,
+  `completed_at` datetime DEFAULT current_timestamp(),
+  `completed_by` int(11) DEFAULT NULL,
+  `delivered_volume` double(10,2) DEFAULT NULL,
+  `price` decimal(10,2) DEFAULT NULL,
+  `source` varchar(30) DEFAULT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 --

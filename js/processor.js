@@ -6,6 +6,7 @@ document.addEventListener('DOMContentLoaded', function() {
     initNavigation();
     initNotifications();
     initWalkInQuickAction();
+    initAutoCancelExpiredAppointments();
 
     const isDashboardPage = !!document.getElementById('chart-data-store');
     if (isDashboardPage) {
@@ -36,6 +37,41 @@ document.addEventListener('DOMContentLoaded', function() {
     initCharts(warehouseCapacity, inventory, available, capacityPercentage, weekDays, weekCounts, weekVolumes);
     initDashboardInteractions();
 });
+
+function initAutoCancelExpiredAppointments() {
+    // Best-effort: keep statuses consistent without requiring a cron job.
+    // Cancels past appointments (per schedule window rules) and emails farmers.
+    // Runs silently unless it actually cancels something.
+    try {
+        fetch('php_helper/api.php?action=autoCancelExpiredAppointments', { cache: 'no-store' })
+            .then(r => r.json())
+            .then(data => {
+                if (!data || !data.success) return;
+                const count = parseInt(data.cancelled_count || 0, 10) || 0;
+                if (count > 0) {
+                    if (typeof showToast === 'function') {
+                        showToast(`${count} past appointment(s) were auto-cancelled by the system.`, 'info');
+                    }
+
+                    // Nudge other tabs/pages (if supported) then refresh this view.
+                    try {
+                        if (typeof window.publishAppointmentsRefresh === 'function') {
+                            window.publishAppointmentsRefresh({ reason: 'auto-cancelled' });
+                        }
+                    } catch (_) {}
+
+                    setTimeout(() => {
+                        try { window.location.reload(); } catch (_) {}
+                    }, 900);
+                }
+            })
+            .catch(() => {
+                // ignore
+            });
+    } catch (e) {
+        // ignore
+    }
+}
 
 function getUserSettings() {
     const defaults = { autoRefresh: true, compact: false, reduceMotion: false, toasts: true };

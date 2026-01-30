@@ -1136,10 +1136,18 @@ function showAppointmentForm() {
 }
 
 function showLoadingOverlay() {
+    if (window.NFALoading && typeof window.NFALoading.show === 'function') {
+        window.NFALoading.show('Processing your request…');
+        return;
+    }
     document.getElementById('loadingOverlay').classList.add('active');
 }
 
 function hideLoadingOverlay() {
+    if (window.NFALoading && typeof window.NFALoading.hide === 'function') {
+        window.NFALoading.hide();
+        return;
+    }
     document.getElementById('loadingOverlay').classList.remove('active');
 }
 

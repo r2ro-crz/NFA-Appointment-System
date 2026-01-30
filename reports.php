@@ -122,10 +122,6 @@ $new_count = count(array_filter($notifications, fn($n) => (empty($n['is_read']) 
                     <i class="fas fa-chart-bar"></i>
                     <span>Reports</span>
                 </a>
-                <a href="farmers.php" class="nav-link">
-                    <i class="fas fa-users"></i>
-                    <span>Farmers</span>
-                </a>
             </div>
         </div>
 
@@ -235,7 +231,7 @@ $new_count = count(array_filter($notifications, fn($n) => (empty($n['is_read']) 
                             <i class="fas fa-chevron-right dropdown-item-arrow"></i>
                         </a>
                         <div class="dropdown-divider"></div>
-                        <a href="login.php" class="dropdown-item logout"><i class="fas fa-sign-out-alt"></i> Logout</a>
+                        <a href="logout.php" class="dropdown-item logout"><i class="fas fa-sign-out-alt"></i> Logout</a>
                     </div>
                 </div>
             </div>

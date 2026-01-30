@@ -11,6 +11,18 @@ if (isset($_GET['pending']) && $_GET['pending'] == 1) {
     $pending_message = "Your account is not yet approved.\nPlease wait for an administrator to approve your registration.";
 }
 
+// Account rejected
+$rejected_message = null;
+if (isset($_GET['rejected']) && $_GET['rejected'] == 1) {
+    $rejected_message = "Your account request was rejected.\nPlease contact the administrator if you believe this is a mistake.";
+}
+
+// Account deactivated
+$deactivated_message = null;
+if (isset($_GET['deactivated']) && $_GET['deactivated'] == 1) {
+    $deactivated_message = "Your account is currently deactivated.\nPlease contact the administrator to restore access.";
+}
+
 // Registration success
 $registered_message = null;
 if (isset($_GET['registered']) && $_GET['registered'] == 1) {
@@ -90,6 +102,26 @@ if (isset($_GET['locked']) && $_GET['locked'] == 1) {
                     <div class="alert-content">
                         <strong>Account Pending Approval</strong>
                         <p><?php echo nl2br(htmlspecialchars($pending_message)); ?></p>
+                    </div>
+                </div>
+            <?php endif; ?>
+
+            <?php if ($rejected_message): ?>
+                <div id="accountRejected" class="alert error" role="alert">
+                    <i class="fas fa-user-times alert-icon"></i>
+                    <div class="alert-content">
+                        <strong>Account Rejected</strong>
+                        <p><?php echo nl2br(htmlspecialchars($rejected_message)); ?></p>
+                    </div>
+                </div>
+            <?php endif; ?>
+
+            <?php if ($deactivated_message): ?>
+                <div id="accountDeactivated" class="alert lockout" role="alert">
+                    <i class="fas fa-user-slash alert-icon"></i>
+                    <div class="alert-content">
+                        <strong>Account Deactivated</strong>
+                        <p><?php echo nl2br(htmlspecialchars($deactivated_message)); ?></p>
                     </div>
                 </div>
             <?php endif; ?>

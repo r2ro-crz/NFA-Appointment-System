@@ -163,10 +163,7 @@ if ($download) {
             </div>
 
             <div class="section">
-                <div class="sig-row">
-                    <div class="sig">Signature (Farmer)</div>
-                    <div class="sig">Receiving Officer</div>
-                </div>
+                
             </div>
         </div>
 

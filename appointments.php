@@ -92,24 +92,35 @@ $appointmentsByDate = [];
 if ($selectedDate) {
     // Optional: include cancellation details if the log table exists
     $hasCancelLog = false;
+    $cancelTable = null;
     try {
-        $t = $pdo->query("SHOW TABLES LIKE 'appointment_cancellations'");
+        $t = $pdo->query("SHOW TABLES LIKE 'cancelled_appointments'");
         $hasCancelLog = $t && $t->fetchColumn();
+        if ($hasCancelLog) {
+            $cancelTable = 'cancelled_appointments';
+        } else {
+            // Backward-compat fallback (legacy name)
+            $t2 = $pdo->query("SHOW TABLES LIKE 'appointment_cancellations'");
+            $hasCancelLog = $t2 && $t2->fetchColumn();
+            if ($hasCancelLog) {
+                $cancelTable = 'appointment_cancellations';
+            }
+        }
     } catch (Exception $e) {
         $hasCancelLog = false;
     }
 
     $cancelSelect = '';
     $cancelJoin = '';
-    if ($hasCancelLog) {
+    if ($hasCancelLog && $cancelTable) {
         $cancelSelect = ", ac.reason_code AS cancel_reason_code, ac.reason_detail AS cancel_reason_detail, ac.cancelled_at AS cancel_cancelled_at";
         $cancelJoin = "
         LEFT JOIN (
             SELECT c1.appointment_id, c1.reason_code, c1.reason_detail, c1.cancelled_at
-            FROM appointment_cancellations c1
+            FROM {$cancelTable} c1
             INNER JOIN (
                 SELECT appointment_id, MAX(cancellation_id) AS max_id
-                FROM appointment_cancellations
+                FROM {$cancelTable}
                 GROUP BY appointment_id
             ) c2
                 ON c1.appointment_id = c2.appointment_id
@@ -202,10 +213,6 @@ $new_count = count(array_filter($notifications, fn($n) => (empty($n['is_read']) 
                 <a href="reports.php" class="nav-link">
                     <i class="fas fa-chart-bar"></i>
                     <span>Reports</span>
-                </a>
-                <a href="farmers.php" class="nav-link">
-                    <i class="fas fa-users"></i>
-                    <span>Farmers</span>
                 </a>
             </div>
         </div>
@@ -325,7 +332,7 @@ $new_count = count(array_filter($notifications, fn($n) => (empty($n['is_read']) 
                             <i class="fas fa-chevron-right dropdown-item-arrow"></i>
                         </a>
                         <div class="dropdown-divider"></div>
-                        <a href="login.php" class="dropdown-item logout">
+                        <a href="logout.php" class="dropdown-item logout">
                             <i class="fas fa-sign-out-alt"></i> Logout
                         </a>
                     </div>
@@ -474,6 +481,7 @@ $new_count = count(array_filter($notifications, fn($n) => (empty($n['is_read']) 
                                         data-date="<?php echo date('F j, Y', strtotime($appt['date'])); ?>"
                                         data-date-iso="<?php echo htmlspecialchars($appt['date'], ENT_QUOTES); ?>"
                                         data-slot="<?php echo $slotLabel; ?>"
+                                        data-slot-raw="<?php echo htmlspecialchars(strtoupper((string)$appt['time_slot']) === 'PM' ? 'PM' : 'AM', ENT_QUOTES); ?>"
                                         data-email="<?php echo htmlspecialchars($appt['email'], ENT_QUOTES); ?>"
                                         data-contact="<?php echo htmlspecialchars($appt['contact_number'], ENT_QUOTES); ?>"
                                         data-gender="<?php echo htmlspecialchars($appt['gender'], ENT_QUOTES); ?>"
@@ -554,6 +562,11 @@ $new_count = count(array_filter($notifications, fn($n) => (empty($n['is_read']) 
                             <label for="receiveVolume"><strong>Bags Received</strong></label>
                             <input type="number" id="receiveVolume" min="0" step="1" class="form-control" />
                             <small class="help-text">Pre-filled from the appointment volume but still editable.</small>
+                        </div>
+                        <div class="modal-section">
+                            <label for="receivePrice"><strong>Price (₱)</strong></label>
+                            <input type="number" id="receivePrice" min="0" step="0.01" class="form-control" placeholder="e.g. 1250.00" />
+                            <small class="help-text">Payment to the farmer for the delivered rice.</small>
                         </div>
                         <div class="modal-section">
                             <button id="receiveSubmit" class="btn-view-details btn-inline-success">Submit Delivery</button>

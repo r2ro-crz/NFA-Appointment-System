@@ -19,6 +19,20 @@
             document.body.appendChild(overlay);
         }
 
+        // Always keep loader above all app modals/popups.
+        // Use inline style to win against any page-specific z-index rules.
+        try {
+            overlay.style.zIndex = '2147483647';
+        } catch (e) {
+            // ignore
+        }
+
+        // If the overlay exists but is nested inside another element (e.g., a modal container),
+        // move it to <body> to avoid stacking-context issues.
+        if (overlay.parentElement !== document.body) {
+            document.body.appendChild(overlay);
+        }
+
         // Ensure content structure exists (some pages might have a simpler overlay).
         if (!overlay.querySelector('.loading-content')) {
             const existingText = overlay.querySelector('p')?.textContent || DEFAULT_MESSAGE;
