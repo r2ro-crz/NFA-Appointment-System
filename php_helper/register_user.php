@@ -14,7 +14,7 @@ function nfa_get_smtp_config(): array {
         'pass' => 'xwucrpggtanqrvwp',
         'port' => 587,
         'from_email' => 'no-reply@nfa.gov.ph',
-        'from_name' => 'NFA Appointment System'
+        'from_name' => 'NFA PalayPortal'
     ];
 }
 
@@ -118,7 +118,7 @@ function nfa_notify_admins_new_registration(PDO $pdo, int $newUserId, array $pay
                 </div>
                 <p style=\"margin:14px 0 0 0\">Review this request here:</p>
                 <p style=\"margin:6px 0 0 0\"><a href=\"{$safe($accountsUrl)}\" target=\"_blank\" rel=\"noopener noreferrer\">{$safe($accountsUrl)}</a></p>
-                <p style=\"margin:14px 0 0 0;color:#6b7280;font-size:12px\">This is an automated notification from the NFA Appointment System.</p>
+                <p style=\"margin:14px 0 0 0;color:#6b7280;font-size:12px\">This is an automated notification from PalayPortal.</p>
             </div>
         ";
 

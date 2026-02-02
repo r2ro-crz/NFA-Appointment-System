@@ -133,6 +133,7 @@ $fmtNum = fn($n) => number_format((float)$n, 0);
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Warehouse Report</title>
+    <link rel="icon" href="img/PalayPortal_logo.png" type="image/png"/>
     <link rel="stylesheet" href="css/print_template.css?v=<?php echo urlencode((string)@filemtime(__DIR__ . '/css/print_template.css')); ?>">
     <style>
         /* Warehouse report is intended to fit on a single A4 page. */

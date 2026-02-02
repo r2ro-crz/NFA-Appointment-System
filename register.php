@@ -1,6 +1,7 @@
 <?php
 session_start();
 require_once __DIR__ . '/php_helper/db_config.php';
+require_once __DIR__ . '/php_helper/branding.php';
 
 $flash = $_SESSION['flash'] ?? [];
 unset($_SESSION['flash']);
@@ -43,8 +44,8 @@ try {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>NFA Staff Registration - Account Request</title>
-    <link rel="icon" href="img/nfa-logo.png" type="image/png"/>
+    <title><?php echo htmlspecialchars(nfa_page_title('Staff Registration'), ENT_QUOTES, 'UTF-8'); ?></title>
+    <link rel="icon" href="<?php echo htmlspecialchars(NFA_FAVICON, ENT_QUOTES, 'UTF-8'); ?>" type="image/png"/>
     <link rel="stylesheet" href="css/login.css">
     <link rel="stylesheet" href="css/register.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
@@ -60,9 +61,11 @@ try {
         <div class="registration-info">
             <div class="info-content">
                 <div class="logo-wrapper">
-                    <img src="img/nfa-logo.png" alt="NFA Logo" class="info-logo">
+                    <div class="brand-logos">
+                        <img src="img/PalayPortal_logo.png" alt="PalayPortal" class="system-logo">
+                    </div>
                     <div class="logo-text">
-                        <h1>National Food Authority</h1>
+                        <h1><?php echo htmlspecialchars(NFA_BRAND_NAME, ENT_QUOTES, 'UTF-8'); ?></h1>
                         <p class="department-tag">Staff Account Registration</p>
                     </div>
                 </div>

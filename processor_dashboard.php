@@ -1,6 +1,7 @@
 <?php
 session_start();
 require_once 'php_helper/db_config.php';
+require_once __DIR__ . '/php_helper/branding.php';
 
 // Prevent caching of protected pages (helps prevent back-button dashboard access after logout)
 header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
@@ -204,7 +205,8 @@ for ($i = 6; $i >= 0; $i--) {
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>NFA Processor Dashboard - Branch Management</title>
+    <title><?php echo htmlspecialchars(nfa_page_title('Processor Dashboard'), ENT_QUOTES, 'UTF-8'); ?></title>
+    <link rel="icon" href="<?php echo htmlspecialchars(NFA_FAVICON, ENT_QUOTES, 'UTF-8'); ?>" type="image/png"/>
     <link rel="stylesheet" href="css/style.css">
     <link rel="stylesheet" href="css/processor.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
@@ -225,10 +227,12 @@ for ($i = 6; $i >= 0; $i--) {
     <!-- Top Navigation -->
     <nav class="top-nav">
         <div class="logo">
-            <img src="img/nfa-logo.png" alt="NFA" class="nfa-logo">
+            <div class="brand-logos">
+                <img src="<?php echo htmlspecialchars(NFA_SYSTEM_LOGO, ENT_QUOTES, 'UTF-8'); ?>" alt="<?php echo htmlspecialchars(NFA_SYSTEM_NAME, ENT_QUOTES, 'UTF-8'); ?>" class="system-logo">
+            </div>
             <div class="logo-text">
-                <h1 class="nfa-title">National Food Authority</h1>
-                <p class="nfa-subtitle">Processor Dashboard</p>
+                <h1 class="nfa-title"><?php echo htmlspecialchars(NFA_BRAND_NAME, ENT_QUOTES, 'UTF-8'); ?></h1>
+                <p class="nfa-subtitle"><span class="page-subtitle">Processor Dashboard</span></p>
             </div>
         </div>
         
@@ -365,6 +369,14 @@ for ($i = 6; $i >= 0; $i--) {
                             <span class="dropdown-item-content">
                                 <span class="dropdown-item-title">Settings</span>
                                 <span class="dropdown-item-desc">Preferences and appearance</span>
+                            </span>
+                            <i class="fas fa-chevron-right dropdown-item-arrow"></i>
+                        </a>
+                        <a href="support_inbox.php" class="dropdown-item">
+                            <i class="fas fa-headset"></i>
+                            <span class="dropdown-item-content">
+                                <span class="dropdown-item-title">Support Inbox</span>
+                                <span class="dropdown-item-desc">Farmer live chats</span>
                             </span>
                             <i class="fas fa-chevron-right dropdown-item-arrow"></i>
                         </a>
@@ -742,7 +754,7 @@ for ($i = 6; $i >= 0; $i--) {
                     </div>
                     <div class="status-item online">
                         <i class="fas fa-circle"></i>
-                        <span>Appointment System</span>
+                        <span>PalayPortal</span>
                         <span class="status-text">Active</span>
                     </div>
                     <div class="status-item online">
@@ -782,5 +794,9 @@ for ($i = 6; $i >= 0; $i--) {
     <script src="js/loading_ui.js?v=<?php echo urlencode((string)@filemtime(__DIR__ . '/js/loading_ui.js')); ?>"></script>
     <script src="js/refresh_bus.js?v=<?php echo urlencode((string)@filemtime(__DIR__ . '/js/refresh_bus.js')); ?>"></script>
     <script src="js/processor.js?v=<?php echo urlencode((string)@filemtime(__DIR__ . '/js/processor.js')); ?>"></script>
+    <script src="js/auto_refresh.js?v=<?php echo urlencode((string)@filemtime(__DIR__ . '/js/auto_refresh.js')); ?>"></script>
+    <script>
+        window.NFAAutoRefresh && window.NFAAutoRefresh.start({ scope: 'processor', intervalMs: 15000, idleMs: 8000 });
+    </script>
 </body>
 </html>

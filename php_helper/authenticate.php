@@ -41,14 +41,14 @@ function send_password_reset_otp_email(string $toEmail, string $toName, string $
     $mail->SMTPSecure = PHPMailer::ENCRYPTION_STARTTLS;
     $mail->Port       = 587;
 
-    $mail->setFrom('no-reply@nfa.gov.ph', 'NFA Appointment System');
+    $mail->setFrom('no-reply@nfa.gov.ph', 'NFA PalayPortal');
     $mail->addAddress($toEmail, $toName);
 
     $mail->isHTML(true);
     $mail->Subject = 'NFA Password Reset Code';
     $mail->Body = "
         <h3>Password Reset Request</h3>
-        <p>We received a request to reset your password for the NFA Appointment System.</p>
+        <p>We received a request to reset your password for PalayPortal.</p>
         <p>Your 6-digit verification code is:</p>
         <div style=\"font-size: 28px; font-weight: 800; letter-spacing: 6px; padding: 10px 0;\">{$otp}</div>
         <p>This code will expire in <strong>10 minutes</strong>.</p>
@@ -69,7 +69,7 @@ function send_password_changed_email(string $toEmail, string $toName): void {
     $mail->SMTPSecure = PHPMailer::ENCRYPTION_STARTTLS;
     $mail->Port       = 587;
 
-    $mail->setFrom('no-reply@nfa.gov.ph', 'NFA Appointment System');
+    $mail->setFrom('no-reply@nfa.gov.ph', 'NFA PalayPortal');
     $mail->addAddress($toEmail, $toName);
 
     $mail->isHTML(true);
@@ -77,7 +77,7 @@ function send_password_changed_email(string $toEmail, string $toName): void {
     $mail->Body = "
         <h3>Password Updated</h3>
         <p>Hello {$toName},</p>
-        <p>This is a confirmation that your password for the NFA Appointment System was changed.</p>
+        <p>This is a confirmation that your password for PalayPortal was changed.</p>
         <p>If you did not make this change, please contact IT support immediately.</p>
     ";
 
@@ -221,7 +221,7 @@ function send_otp_email(string $toEmail, string $toName, string $otp): void {
     $mail->Port       = 587;
 
     // Recipients
-    $mail->setFrom('no-reply@nfa.gov.ph', 'NFA Appointment System');
+    $mail->setFrom('no-reply@nfa.gov.ph', 'NFA PalayPortal');
     $mail->addAddress($toEmail, $toName);
 
     // Content
@@ -229,7 +229,7 @@ function send_otp_email(string $toEmail, string $toName, string $otp): void {
     $mail->Subject = 'Your NFA Login Verification Code';
     $mail->Body = "
         <h3>Login Verification Code</h3>
-        <p>You are trying to sign in to the NFA Appointment System.</p>
+        <p>You are trying to sign in to PalayPortal.</p>
         <p>Your 6-digit verification code is:</p>
         <div style=\"font-size: 28px; font-weight: 800; letter-spacing: 6px; padding: 10px 0;\">{$otp}</div>
         <p>This code will expire in <strong>5 minutes</strong>.</p>

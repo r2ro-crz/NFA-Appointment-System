@@ -18,6 +18,34 @@ function sanitize_input($data) {
     return $data;
 }
 
+// Read request payload for endpoints that accept JSON or form-urlencoded.
+// php://input can be empty depending on server/modules; merge in $_POST as a fallback.
+function nfa_request_payload(): array {
+    static $cached = null;
+    if (is_array($cached)) return $cached;
+
+    $payload = [];
+
+    $raw = @file_get_contents('php://input');
+    if (is_string($raw)) {
+        $rawTrim = trim($raw);
+        if ($rawTrim !== '') {
+            $decoded = json_decode($rawTrim, true);
+            if (is_array($decoded)) {
+                $payload = $decoded;
+            }
+        }
+    }
+
+    if (!empty($_POST) && is_array($_POST)) {
+        // Prefer explicit form fields when present
+        $payload = array_merge($payload, $_POST);
+    }
+
+    $cached = $payload;
+    return $payload;
+}
+
 function nfa_table_exists(PDO $pdo, string $table): bool {
     try {
         $stmt = $pdo->prepare('SHOW TABLES LIKE ?');
@@ -116,6 +144,126 @@ function nfa_require_role(string $role): void {
         echo json_encode(['success' => false, 'error' => 'Forbidden']);
         exit;
     }
+}
+
+function nfa_ensure_branch_appointment_freeze_schema(PDO $pdo): void {
+    static $ran = false;
+    if ($ran) return;
+    $ran = true;
+
+    try {
+        $pdo->exec(
+            "CREATE TABLE IF NOT EXISTS branch_appointment_freeze (\n" .
+            "  branch_id INT(11) NOT NULL,\n" .
+            "  is_frozen TINYINT(1) NOT NULL DEFAULT 0,\n" .
+            "  reason VARCHAR(255) NULL,\n" .
+            "  frozen_by INT(11) NULL,\n" .
+            "  frozen_at DATETIME NULL,\n" .
+            "  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,\n" .
+            "  PRIMARY KEY (branch_id),\n" .
+            "  KEY idx_is_frozen (is_frozen),\n" .
+            "  KEY idx_frozen_at (frozen_at)\n" .
+            ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"
+        );
+    } catch (PDOException $e) {
+        // best-effort
+    }
+}
+
+function nfa_get_branch_capacity_snapshot(PDO $pdo, int $branchId): array {
+    $warehouse_capacity = 0.0;
+    $inventory = 0.0;
+
+    try {
+        if ($branchId > 0 && nfa_table_exists($pdo, 'volume_capacity')) {
+            $stmt = $pdo->prepare('SELECT warehouse_capacity, inventory FROM volume_capacity WHERE branch_id = ? LIMIT 1');
+            $stmt->execute([$branchId]);
+            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+            if (is_array($row)) {
+                $warehouse_capacity = (float)($row['warehouse_capacity'] ?? 0);
+                $inventory = (float)($row['inventory'] ?? 0);
+            }
+        }
+    } catch (PDOException $e) {
+        // best-effort
+    }
+
+    $percent = ($warehouse_capacity > 0) ? ($inventory / $warehouse_capacity) * 100 : 0;
+    $isFull = ($warehouse_capacity > 0) && ($inventory >= $warehouse_capacity);
+    return [
+        'warehouse_capacity' => $warehouse_capacity,
+        'inventory' => $inventory,
+        'percent' => $percent,
+        'is_full' => $isFull,
+    ];
+}
+
+function nfa_get_branch_appointment_freeze(PDO $pdo, int $branchId): array {
+    nfa_ensure_branch_appointment_freeze_schema($pdo);
+    $out = [
+        'manual_frozen' => false,
+        'manual_reason' => null,
+        'manual_frozen_at' => null,
+        'manual_frozen_by' => null,
+    ];
+
+    if ($branchId <= 0) return $out;
+    if (!nfa_table_exists($pdo, 'branch_appointment_freeze')) return $out;
+
+    try {
+        $stmt = $pdo->prepare('SELECT is_frozen, reason, frozen_by, frozen_at FROM branch_appointment_freeze WHERE branch_id = ? LIMIT 1');
+        $stmt->execute([$branchId]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (is_array($row)) {
+            $out['manual_frozen'] = ((int)($row['is_frozen'] ?? 0) === 1);
+            $out['manual_reason'] = isset($row['reason']) ? (string)$row['reason'] : null;
+            $out['manual_frozen_at'] = isset($row['frozen_at']) ? (string)$row['frozen_at'] : null;
+            $out['manual_frozen_by'] = isset($row['frozen_by']) ? (int)$row['frozen_by'] : null;
+        }
+    } catch (PDOException $e) {
+        // best-effort
+    }
+
+    return $out;
+}
+
+function nfa_get_effective_appointment_freeze(PDO $pdo, int $branchId): array {
+    $cap = nfa_get_branch_capacity_snapshot($pdo, $branchId);
+    $freeze = nfa_get_branch_appointment_freeze($pdo, $branchId);
+
+    $effective = (bool)($freeze['manual_frozen'] ?? false) || (bool)($cap['is_full'] ?? false);
+    $source = null;
+    if ((bool)($cap['is_full'] ?? false)) {
+        $source = 'warehouse_full';
+    } elseif ((bool)($freeze['manual_frozen'] ?? false)) {
+        $source = 'manual';
+    }
+
+    $message = '';
+    if ($effective) {
+        if ($source === 'warehouse_full') {
+            $message = 'Warehouse is 100% full. New appointments are temporarily frozen for this branch.';
+        } else {
+            $r = trim((string)($freeze['manual_reason'] ?? ''));
+            $message = $r !== ''
+                ? ('New appointments are temporarily frozen for this branch. Reason: ' . $r)
+                : 'New appointments are temporarily frozen for this branch.';
+        }
+    }
+
+    return [
+        'manual_frozen' => (bool)($freeze['manual_frozen'] ?? false),
+        'manual_reason' => $freeze['manual_reason'] ?? null,
+        'manual_frozen_at' => $freeze['manual_frozen_at'] ?? null,
+        'manual_frozen_by' => $freeze['manual_frozen_by'] ?? null,
+        'is_full' => (bool)($cap['is_full'] ?? false),
+        'warehouse_capacity' => (float)($cap['warehouse_capacity'] ?? 0),
+        'inventory' => (float)($cap['inventory'] ?? 0),
+        'percent' => (float)($cap['percent'] ?? 0),
+        'effective_frozen' => $effective,
+        'source' => $source,
+        'message' => $message,
+    ];
 }
 
 function nfa_ensure_login_attempts_schema(PDO $pdo): void {
@@ -297,6 +445,280 @@ function nfa_ensure_status_audit_schema(PDO $pdo): void {
     }
 }
 
+function nfa_random_token(int $bytes = 16): string {
+    try {
+        return bin2hex(random_bytes(max(8, $bytes)));
+    } catch (Exception $e) {
+        // Fallback (best-effort)
+        return bin2hex(pack('N2', time(), random_int(1, PHP_INT_MAX)));
+    }
+}
+
+function nfa_support_chat_is_open(?array $chat): bool {
+    if (!$chat) return false;
+    return strtolower((string)($chat['status'] ?? '')) === 'open';
+}
+
+function nfa_ensure_support_chat_schema(PDO $pdo): void {
+    static $ran = false;
+    if ($ran) return;
+    $ran = true;
+
+    try {
+        $pdo->exec(
+            "CREATE TABLE IF NOT EXISTS support_chats (\n" .
+            "  chat_id INT(11) NOT NULL AUTO_INCREMENT,\n" .
+            "  chat_token VARCHAR(80) NOT NULL,\n" .
+            "  origin VARCHAR(20) NOT NULL,\n" .
+            "  status VARCHAR(20) NOT NULL DEFAULT 'open',\n" .
+            "  region_id INT(11) NULL,\n" .
+            "  branch_id INT(11) NULL,\n" .
+            "  processor_user_id INT(11) NULL,\n" .
+            "  farmer_display_name VARCHAR(120) NULL,\n" .
+            "  farmer_contact VARCHAR(160) NULL,\n" .
+            "  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,\n" .
+            "  last_activity_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,\n" .
+            "  closed_at TIMESTAMP NULL DEFAULT NULL,\n" .
+            "  closed_by_role VARCHAR(20) NULL,\n" .
+            "  closed_reason VARCHAR(30) NULL,\n" .
+            "  PRIMARY KEY (chat_id),\n" .
+            "  UNIQUE KEY uniq_chat_token (chat_token),\n" .
+            "  KEY idx_origin_status (origin, status),\n" .
+            "  KEY idx_branch (branch_id),\n" .
+            "  KEY idx_last_activity (last_activity_at)\n" .
+            ") ENGINE=InnoDB DEFAULT CHARSET=utf8"
+        );
+    } catch (PDOException $e) {
+        error_log('Support chat schema (support_chats) create failed: ' . $e->getMessage());
+    }
+
+    // Best-effort column adds (for existing installs)
+    try {
+        if (nfa_table_exists($pdo, 'support_chats') && !nfa_column_exists($pdo, 'support_chats', 'closed_at')) {
+            $pdo->exec("ALTER TABLE support_chats ADD COLUMN closed_at TIMESTAMP NULL DEFAULT NULL");
+        }
+    } catch (PDOException $e) {
+        // best-effort
+    }
+    try {
+        if (nfa_table_exists($pdo, 'support_chats') && !nfa_column_exists($pdo, 'support_chats', 'closed_by_role')) {
+            $pdo->exec("ALTER TABLE support_chats ADD COLUMN closed_by_role VARCHAR(20) NULL");
+        }
+    } catch (PDOException $e) {
+        // best-effort
+    }
+    try {
+        if (nfa_table_exists($pdo, 'support_chats') && !nfa_column_exists($pdo, 'support_chats', 'closed_reason')) {
+            $pdo->exec("ALTER TABLE support_chats ADD COLUMN closed_reason VARCHAR(30) NULL");
+        }
+    } catch (PDOException $e) {
+        // best-effort
+    }
+
+    try {
+        $pdo->exec(
+            "CREATE TABLE IF NOT EXISTS support_chat_messages (\n" .
+            "  id INT(11) NOT NULL AUTO_INCREMENT,\n" .
+            "  chat_id INT(11) NOT NULL,\n" .
+            "  sender_role VARCHAR(20) NOT NULL,\n" .
+            "  sender_user_id INT(11) NULL,\n" .
+            "  message TEXT NOT NULL,\n" .
+            "  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,\n" .
+            "  PRIMARY KEY (id),\n" .
+            "  KEY idx_chat_id (chat_id),\n" .
+            "  KEY idx_created_at (created_at)\n" .
+            ") ENGINE=InnoDB DEFAULT CHARSET=utf8"
+        );
+    } catch (PDOException $e) {
+        error_log('Support chat schema (support_chat_messages) create failed: ' . $e->getMessage());
+    }
+}
+
+function nfa_support_chat_cleanup(PDO $pdo): void {
+    // Ephemeral lifecycle:
+    // - Auto-close open chats after 3 minutes of inactivity
+    // - Delete closed chats after a short grace period
+    try {
+        if (!nfa_table_exists($pdo, 'support_chats') || !nfa_table_exists($pdo, 'support_chat_messages')) return;
+
+        // 1) Auto-close inactive open chats (3 minutes)
+        $stmt = $pdo->query("SELECT chat_id FROM support_chats WHERE status = 'open' AND last_activity_at < (NOW() - INTERVAL 3 MINUTE) LIMIT 200");
+        $toClose = $stmt ? $stmt->fetchAll(PDO::FETCH_COLUMN) : [];
+        if ($toClose && count($toClose) > 0) {
+            foreach ($toClose as $cid) {
+                $chatId = (int)$cid;
+                if ($chatId <= 0) continue;
+                // Add a final system message so the farmer can see why it ended.
+                $pdo->prepare('INSERT INTO support_chat_messages (chat_id, sender_role, sender_user_id, message) VALUES (?, ?, NULL, ?)')
+                    ->execute([$chatId, 'system', 'This chat session has been closed due to inactivity. If you still need assistance, please start a new chat.']);
+                $pdo->prepare("UPDATE support_chats SET status='closed', closed_at=NOW(), closed_by_role='system', closed_reason='inactivity', last_activity_at=NOW() WHERE chat_id = ?")
+                    ->execute([$chatId]);
+            }
+        }
+
+        // 2) Delete closed chats after 10 minutes (and their messages)
+        $stmt2 = $pdo->query("SELECT chat_id FROM support_chats WHERE status = 'closed' AND last_activity_at < (NOW() - INTERVAL 10 MINUTE) LIMIT 200");
+        $closedIds = $stmt2 ? $stmt2->fetchAll(PDO::FETCH_COLUMN) : [];
+        if ($closedIds && count($closedIds) > 0) {
+            $closedIds = array_values(array_filter(array_map('intval', $closedIds), fn($v) => $v > 0));
+            if (count($closedIds) > 0) {
+                $in = implode(',', array_fill(0, count($closedIds), '?'));
+                $pdo->prepare("DELETE FROM support_chat_messages WHERE chat_id IN ($in)")->execute($closedIds);
+                $pdo->prepare("DELETE FROM support_chats WHERE chat_id IN ($in)")->execute($closedIds);
+            }
+        }
+    } catch (PDOException $e) {
+        // best-effort
+    }
+}
+
+function nfa_support_chat_close(PDO $pdo, int $chatId, string $byRole, string $reason, string $systemMessage): void {
+    if ($chatId <= 0) return;
+    $byRole = strtolower(trim($byRole));
+    $reason = strtolower(trim($reason));
+    if ($byRole === '') $byRole = 'system';
+    if ($reason === '') $reason = 'ended';
+
+    try {
+        // Only close if currently open
+        $row = nfa_support_chat_fetch_by_id($pdo, $chatId);
+        if (!$row || !nfa_support_chat_is_open($row)) return;
+
+        $pdo->prepare('INSERT INTO support_chat_messages (chat_id, sender_role, sender_user_id, message) VALUES (?, ?, NULL, ?)')
+            ->execute([$chatId, 'system', $systemMessage]);
+
+        $pdo->prepare("UPDATE support_chats SET status='closed', closed_at=NOW(), closed_by_role=?, closed_reason=?, last_activity_at=NOW() WHERE chat_id = ?")
+            ->execute([$byRole, $reason, $chatId]);
+    } catch (PDOException $e) {
+        // best-effort
+    }
+}
+
+function nfa_support_chat_require_staff(): void {
+    if (!isset($_SESSION['loggedin'])) {
+        http_response_code(401);
+        echo json_encode(['success' => false, 'error' => 'Unauthorized']);
+        exit;
+    }
+    $t = (string)($_SESSION['user_type'] ?? '');
+    if ($t !== 'Admin' && $t !== 'Processor') {
+        http_response_code(403);
+        echo json_encode(['success' => false, 'error' => 'Forbidden']);
+        exit;
+    }
+}
+
+function nfa_support_chat_fetch_by_token(PDO $pdo, string $token): ?array {
+    $token = trim($token);
+    if ($token === '') return null;
+    try {
+        $stmt = $pdo->prepare('SELECT * FROM support_chats WHERE chat_token = ? LIMIT 1');
+        $stmt->execute([$token]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        return $row ?: null;
+    } catch (PDOException $e) {
+        return null;
+    }
+}
+
+function nfa_support_chat_fetch_by_id(PDO $pdo, int $chatId): ?array {
+    if ($chatId <= 0) return null;
+    try {
+        $stmt = $pdo->prepare('SELECT * FROM support_chats WHERE chat_id = ? LIMIT 1');
+        $stmt->execute([$chatId]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        return $row ?: null;
+    } catch (PDOException $e) {
+        return null;
+    }
+}
+
+function nfa_support_chat_staff_can_access(array $chat, string $userType, int $userId, int $branchId): bool {
+    $origin = strtolower((string)($chat['origin'] ?? ''));
+    if ($userType === 'Admin') {
+        // Admin can read processor-origin chats, and can also help with farmer chats if needed.
+        return $origin === 'processor' || $origin === 'farmer';
+    }
+
+    // Processor access:
+    // - farmer chats for their branch
+    // - their own processor->admin chats
+    if ($origin === 'farmer') {
+        return ((int)($chat['branch_id'] ?? 0)) === $branchId && $branchId > 0;
+    }
+    if ($origin === 'processor') {
+        return ((int)($chat['processor_user_id'] ?? 0)) === $userId && $userId > 0;
+    }
+    return false;
+}
+
+function nfa_ensure_capacity_change_logs_schema(PDO $pdo): void {
+    static $ran = false;
+    if ($ran) return;
+    $ran = true;
+
+    try {
+        $pdo->exec(
+            "CREATE TABLE IF NOT EXISTS capacity_change_logs (\n" .
+            "  id INT(11) NOT NULL AUTO_INCREMENT,\n" .
+            "  changed_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,\n" .
+            "  branch_id INT(11) NOT NULL,\n" .
+            "  changed_by_user_id INT(11) NULL,\n" .
+            "  changed_by_role VARCHAR(20) NULL,\n" .
+            "  old_warehouse_capacity DECIMAL(12,2) NOT NULL DEFAULT 0,\n" .
+            "  new_warehouse_capacity DECIMAL(12,2) NOT NULL DEFAULT 0,\n" .
+            "  old_inventory DECIMAL(12,2) NOT NULL DEFAULT 0,\n" .
+            "  new_inventory DECIMAL(12,2) NOT NULL DEFAULT 0,\n" .
+            "  reason VARCHAR(255) NULL,\n" .
+            "  PRIMARY KEY (id),\n" .
+            "  KEY idx_branch_changed_at (branch_id, changed_at),\n" .
+            "  KEY idx_changed_by (changed_by_user_id)\n" .
+            ") ENGINE=InnoDB DEFAULT CHARSET=utf8"
+        );
+    } catch (PDOException $e) {
+        // best-effort
+    }
+}
+
+function nfa_log_capacity_change_best_effort(
+    PDO $pdo,
+    int $branchId,
+    float $oldCap,
+    float $newCap,
+    float $oldInv,
+    float $newInv,
+    ?int $userId,
+    ?string $role,
+    ?string $reason
+): void {
+    try {
+        if ($branchId <= 0) return;
+        if (!nfa_table_exists($pdo, 'capacity_change_logs')) return;
+
+        $role = is_string($role) ? trim($role) : '';
+        $reason = is_string($reason) ? trim($reason) : '';
+        if ($reason !== '' && strlen($reason) > 255) $reason = substr($reason, 0, 255);
+        if ($role !== '' && strlen($role) > 20) $role = substr($role, 0, 20);
+
+        $stmt = $pdo->prepare(
+            'INSERT INTO capacity_change_logs (branch_id, changed_by_user_id, changed_by_role, old_warehouse_capacity, new_warehouse_capacity, old_inventory, new_inventory, reason) ' .
+            'VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+        );
+        $stmt->execute([
+            $branchId,
+            ($userId && $userId > 0) ? $userId : null,
+            ($role !== '') ? $role : null,
+            $oldCap,
+            $newCap,
+            $oldInv,
+            $newInv,
+            ($reason !== '') ? $reason : null
+        ]);
+    } catch (PDOException $e) {
+        // best-effort
+    }
+}
+
 function nfa_get_smtp_config() {
     return [
         'host' => 'smtp.gmail.com',
@@ -304,7 +726,7 @@ function nfa_get_smtp_config() {
         'pass' => 'xwucrpggtanqrvwp',
         'port' => 587,
         'from_email' => 'no-reply@nfa.gov.ph',
-        'from_name' => 'NFA Appointment System'
+        'from_name' => 'NFA PalayPortal'
     ];
 }
 
@@ -434,10 +856,214 @@ try {
     // don't block API calls
 }
 
+// Best-effort schema for support chat (ephemeral assistance)
+try {
+    nfa_ensure_support_chat_schema($pdo);
+    nfa_support_chat_cleanup($pdo);
+} catch (Exception $e) {
+    // don't block API calls
+}
+
+// Best-effort schema for capacity audit trail
+try {
+    nfa_ensure_capacity_change_logs_schema($pdo);
+} catch (Exception $e) {
+    // don't block API calls
+}
+
 // --- Main Request Handler ---
 $action = $_GET['action'] ?? '';
 
 switch ($action) {
+    case 'getChangeToken':
+        // Lightweight server-backed change token for auto-refresh across different users/devices.
+        // scope=admin|processor
+        try {
+            if (!isset($_SESSION['loggedin'])) {
+                http_response_code(401);
+                echo json_encode(['success' => false, 'error' => 'Unauthorized']);
+                break;
+            }
+
+            $scope = strtolower((string)sanitize_input($_GET['scope'] ?? ''));
+            $userType = (string)($_SESSION['user_type'] ?? '');
+
+            if ($scope === 'admin') {
+                if ($userType !== 'Admin') {
+                    http_response_code(403);
+                    echo json_encode(['success' => false, 'error' => 'Forbidden']);
+                    break;
+                }
+
+                $parts = [];
+                // Users table changes
+                try {
+                    if (nfa_table_exists($pdo, 'users')) {
+                        $maxUserId = (int)($pdo->query('SELECT MAX(user_id) FROM users')->fetchColumn() ?: 0);
+                        $parts[] = 'u_max:' . $maxUserId;
+
+                        if (nfa_column_exists($pdo, 'users', 'created_at')) {
+                            $maxUserCreated = (string)($pdo->query('SELECT MAX(created_at) FROM users')->fetchColumn() ?: '');
+                            $parts[] = 'u_mc:' . $maxUserCreated;
+                        }
+                    }
+                } catch (PDOException $e) {
+                    // ignore
+                }
+
+                // Activity log changes
+                try {
+                    if (nfa_table_exists($pdo, 'activity_logs')) {
+                        $maxLogId = (int)($pdo->query('SELECT MAX(log_id) FROM activity_logs')->fetchColumn() ?: 0);
+                        $parts[] = 'al_max:' . $maxLogId;
+
+                        $maxLogTs = (string)($pdo->query('SELECT MAX(timestamp) FROM activity_logs')->fetchColumn() ?: '');
+                        $parts[] = 'al_mt:' . $maxLogTs;
+                    }
+                } catch (PDOException $e) {
+                    // ignore
+                }
+
+                // Appointment status audit tables (best-effort)
+                $auditTables = [
+                    ['confirmed_appointments', 'confirmation_id', 'confirmed_at'],
+                    ['cancelled_appointments', 'cancellation_id', 'cancelled_at'],
+                    ['rescheduled_appointments', 'reschedule_id', 'rescheduled_at'],
+                    ['completed_appointments', 'completion_id', 'completed_at'],
+                ];
+
+                foreach ($auditTables as $cfg) {
+                    [$table, $idCol, $tsCol] = $cfg;
+                    try {
+                        if (!nfa_table_exists($pdo, $table)) continue;
+                        $maxId = (int)($pdo->query("SELECT MAX({$idCol}) FROM {$table}")->fetchColumn() ?: 0);
+                        $parts[] = $table . '_max:' . $maxId;
+                        if (nfa_column_exists($pdo, $table, $tsCol)) {
+                            $maxTs = (string)($pdo->query("SELECT MAX({$tsCol}) FROM {$table}")->fetchColumn() ?: '');
+                            $parts[] = $table . '_mt:' . $maxTs;
+                        }
+                    } catch (PDOException $e) {
+                        // ignore
+                    }
+                }
+
+                // New appointments (pending etc.)
+                try {
+                    if (nfa_table_exists($pdo, 'appointments')) {
+                        $maxApptId = (int)($pdo->query('SELECT MAX(appointment_id) FROM appointments')->fetchColumn() ?: 0);
+                        $parts[] = 'a_max:' . $maxApptId;
+                        if (nfa_column_exists($pdo, 'appointments', 'date_submitted')) {
+                            $maxSubmitted = (string)($pdo->query('SELECT MAX(date_submitted) FROM appointments')->fetchColumn() ?: '');
+                            $parts[] = 'a_ms:' . $maxSubmitted;
+                        }
+                    }
+                } catch (PDOException $e) {
+                    // ignore
+                }
+
+                $raw = implode('|', $parts);
+                $token = sha1($raw);
+                echo json_encode(['success' => true, 'scope' => 'admin', 'token' => $token, 'ts' => time()]);
+                break;
+            }
+
+            if ($scope === 'processor') {
+                if ($userType !== 'Processor') {
+                    http_response_code(403);
+                    echo json_encode(['success' => false, 'error' => 'Forbidden']);
+                    break;
+                }
+
+                $branchId = (int)($_SESSION['branch_id'] ?? 0);
+                if ($branchId <= 0) {
+                    http_response_code(400);
+                    echo json_encode(['success' => false, 'error' => 'Missing branch context']);
+                    break;
+                }
+
+                $parts = ['branch:' . $branchId];
+
+                // Appointments in this branch
+                try {
+                    if (nfa_table_exists($pdo, 'appointments')) {
+                        $stmt = $pdo->prepare('SELECT MAX(appointment_id) FROM appointments WHERE branch_id = ?');
+                        $stmt->execute([$branchId]);
+                        $maxApptId = (int)($stmt->fetchColumn() ?: 0);
+                        $parts[] = 'a_max:' . $maxApptId;
+
+                        if (nfa_column_exists($pdo, 'appointments', 'date_submitted')) {
+                            $stmt = $pdo->prepare('SELECT MAX(date_submitted) FROM appointments WHERE branch_id = ?');
+                            $stmt->execute([$branchId]);
+                            $maxSubmitted = (string)($stmt->fetchColumn() ?: '');
+                            $parts[] = 'a_ms:' . $maxSubmitted;
+                        }
+                    }
+                } catch (PDOException $e) {
+                    // ignore
+                }
+
+                // Audit tables scoped by appointment->branch
+                $auditTables = [
+                    ['confirmed_appointments', 'confirmation_id', 'confirmed_at'],
+                    ['cancelled_appointments', 'cancellation_id', 'cancelled_at'],
+                    ['rescheduled_appointments', 'reschedule_id', 'rescheduled_at'],
+                    ['completed_appointments', 'completion_id', 'completed_at'],
+                ];
+
+                foreach ($auditTables as $cfg) {
+                    [$table, $idCol, $tsCol] = $cfg;
+                    try {
+                        if (!nfa_table_exists($pdo, $table) || !nfa_table_exists($pdo, 'appointments')) continue;
+
+                        $stmt = $pdo->prepare(
+                            "SELECT MAX(t.{$idCol}) FROM {$table} t JOIN appointments a ON a.appointment_id = t.appointment_id WHERE a.branch_id = ?"
+                        );
+                        $stmt->execute([$branchId]);
+                        $maxId = (int)($stmt->fetchColumn() ?: 0);
+                        $parts[] = $table . '_max:' . $maxId;
+
+                        if (nfa_column_exists($pdo, $table, $tsCol)) {
+                            $stmt = $pdo->prepare(
+                                "SELECT MAX(t.{$tsCol}) FROM {$table} t JOIN appointments a ON a.appointment_id = t.appointment_id WHERE a.branch_id = ?"
+                            );
+                            $stmt->execute([$branchId]);
+                            $maxTs = (string)($stmt->fetchColumn() ?: '');
+                            $parts[] = $table . '_mt:' . $maxTs;
+                        }
+                    } catch (PDOException $e) {
+                        // ignore
+                    }
+                }
+
+                // Capacity changes for this branch
+                try {
+                    if (nfa_table_exists($pdo, 'volume_capacity')) {
+                        $stmt = $pdo->prepare('SELECT warehouse_capacity, inventory FROM volume_capacity WHERE branch_id = ? LIMIT 1');
+                        $stmt->execute([$branchId]);
+                        $row = $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
+                        if ($row) {
+                            $parts[] = 'cap:' . (string)($row['warehouse_capacity'] ?? '');
+                            $parts[] = 'inv:' . (string)($row['inventory'] ?? '');
+                        }
+                    }
+                } catch (PDOException $e) {
+                    // ignore
+                }
+
+                $raw = implode('|', $parts);
+                $token = sha1($raw);
+                echo json_encode(['success' => true, 'scope' => 'processor', 'branch_id' => $branchId, 'token' => $token, 'ts' => time()]);
+                break;
+            }
+
+            http_response_code(400);
+            echo json_encode(['success' => false, 'error' => 'Invalid scope']);
+        } catch (Exception $e) {
+            http_response_code(500);
+            echo json_encode(['success' => false, 'error' => 'Failed to compute change token']);
+        }
+        break;
+
     case 'generateReferenceNumber':
         // Generate a reference number for preview (final upon submission)
         try {
@@ -1039,13 +1665,23 @@ switch ($action) {
             }
             
             // F. Send Consolidated Response
+            $freeze = nfa_get_effective_appointment_freeze($pdo, $branch_id);
+            $appointment_freeze = [
+                'effective_frozen' => (bool)($freeze['effective_frozen'] ?? false),
+                'source' => $freeze['source'] ?? null,
+                'message' => (string)($freeze['message'] ?? ''),
+                'manual_frozen' => (bool)($freeze['manual_frozen'] ?? false),
+                'is_full' => (bool)($freeze['is_full'] ?? false),
+            ];
+
             echo json_encode([
                 'success' => true,
                 'capacity_info' => $volume_info,
                 'default_slot_capacity' => $default_capacity,
                 'daily_availability' => $availability_data,
                 'holidays' => $holidays,
-                'holiday_details' => $holiday_details
+                'holiday_details' => $holiday_details,
+                'appointment_freeze' => $appointment_freeze
             ]);
 
         } catch (\PDOException $e) {
@@ -1207,6 +1843,19 @@ switch ($action) {
             exit;
         }
 
+        // Waitlist management: block new appointments when warehouse is full or branch intake is manually frozen.
+        try {
+            $freezeInfo = nfa_get_effective_appointment_freeze($pdo, (int)$data['branch_id']);
+            if (!empty($freezeInfo['effective_frozen'])) {
+                http_response_code(409);
+                $msg = (string)($freezeInfo['message'] ?? 'New appointments are temporarily frozen for this branch.');
+                echo json_encode(['success' => false, 'error' => $msg, 'freeze' => $freezeInfo]);
+                exit;
+            }
+        } catch (Exception $e) {
+            // best-effort; do not block on freeze check failure
+        }
+
         // Verify reCAPTCHA token is present
         if (empty($data['g_recaptcha_response'])) {
             http_response_code(400);
@@ -1358,7 +2007,7 @@ switch ($action) {
 
                         $confirmationDocHtml = "<!doctype html>
 <html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">
-<title>NFA Appointment Confirmation - {$referenceSafe}</title>
+<title>NFA PalayPortal | Appointment Confirmation - {$referenceSafe}</title>
 <style>
   body{font-family:Arial,Helvetica,sans-serif;color:#111;line-height:1.4;margin:0;padding:24px;background:#f6f7f9;}
   .doc{max-width:820px;margin:0 auto;background:#fff;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;}
@@ -1377,7 +2026,7 @@ switch ($action) {
   <div class=\"doc\">
     <div class=\"hdr\">
       <div>
-        <h1>National Food Authority — Appointment Confirmation</h1>
+        <h1>NFA PalayPortal — Appointment Confirmation</h1>
         <div class=\"sub\">System Version 1 • Last Updated: January 2026</div>
       </div>
     </div>
@@ -1414,7 +2063,7 @@ switch ($action) {
                     $mailProc->SMTPSecure = PHPMailer::ENCRYPTION_STARTTLS;
                     $mailProc->Port = $smtpPort;
 
-                    $mailProc->setFrom('no-reply@nfa.gov.ph', 'NFA Appointment System');
+                    $mailProc->setFrom('no-reply@nfa.gov.ph', 'NFA PalayPortal');
                     $mailProc->addAddress($processor['email_address']);
                     $mailProc->isHTML(true);
                     $mailProc->Subject = 'New Appointment: ' . $reference_number;
@@ -1450,7 +2099,7 @@ switch ($action) {
                     $mailFarmer->SMTPSecure = PHPMailer::ENCRYPTION_STARTTLS;
                     $mailFarmer->Port = $smtpPort;
 
-                    $mailFarmer->setFrom('no-reply@nfa.gov.ph', 'NFA Appointment System');
+                    $mailFarmer->setFrom('no-reply@nfa.gov.ph', 'NFA PalayPortal');
                     $mailFarmer->addAddress($data['email']);
                     $mailFarmer->isHTML(true);
                     $mailFarmer->Subject = 'Appointment Request Received: ' . $reference_number;
@@ -1567,6 +2216,19 @@ switch ($action) {
             http_response_code(400);
             echo json_encode(['success' => false, 'error' => 'Missing branch']);
             break;
+        }
+
+        // Waitlist management: block new walk-ins when warehouse is full or intake is frozen.
+        try {
+            $freezeInfo = nfa_get_effective_appointment_freeze($pdo, $branch_id);
+            if (!empty($freezeInfo['effective_frozen'])) {
+                http_response_code(409);
+                $msg = (string)($freezeInfo['message'] ?? 'New appointments are temporarily frozen for this branch.');
+                echo json_encode(['success' => false, 'error' => $msg, 'freeze' => $freezeInfo]);
+                break;
+            }
+        } catch (Exception $e) {
+            // best-effort
         }
 
         $data = json_decode(file_get_contents('php://input'), true);
@@ -3145,6 +3807,8 @@ switch ($action) {
             $available = max(0, $warehouse_capacity - $inventory);
             $percent = ($warehouse_capacity > 0) ? ($inventory / $warehouse_capacity) * 100 : 0;
 
+            $freeze = nfa_get_effective_appointment_freeze($pdo, $branch_id);
+
             echo json_encode([
                 'success' => true,
                 'data' => [
@@ -3156,13 +3820,84 @@ switch ($action) {
                     'warehouse_capacity' => $warehouse_capacity,
                     'inventory' => $inventory,
                     'available' => $available,
-                    'percent' => $percent
+                    'percent' => $percent,
+                    'appointment_freeze' => $freeze
                 ]
             ]);
         } catch (\PDOException $e) {
             error_log('getCapacityManagementData failed: ' . $e->getMessage());
             http_response_code(500);
             echo json_encode(['success' => false, 'error' => 'Failed to load capacity data.']);
+        }
+        break;
+
+    case 'processorGetAppointmentFreeze':
+        try {
+            nfa_require_role('Processor');
+            $branch_id = (int)($_SESSION['branch_id'] ?? 0);
+            if ($branch_id <= 0) {
+                http_response_code(400);
+                echo json_encode(['success' => false, 'error' => 'Missing branch context.']);
+                break;
+            }
+
+            $freeze = nfa_get_effective_appointment_freeze($pdo, $branch_id);
+            echo json_encode(['success' => true, 'data' => $freeze]);
+        } catch (Exception $e) {
+            http_response_code(500);
+            echo json_encode(['success' => false, 'error' => 'Failed to load freeze status.']);
+        }
+        break;
+
+    case 'processorSetAppointmentFreeze':
+        try {
+            nfa_require_role('Processor');
+            $branch_id = (int)($_SESSION['branch_id'] ?? 0);
+            if ($branch_id <= 0) {
+                http_response_code(400);
+                echo json_encode(['success' => false, 'error' => 'Missing branch context.']);
+                break;
+            }
+
+            $payload = nfa_request_payload();
+            $isFrozenRaw = $payload['is_frozen'] ?? $payload['frozen'] ?? null;
+            $isFrozen = (int)(is_bool($isFrozenRaw) ? ($isFrozenRaw ? 1 : 0) : (is_numeric($isFrozenRaw) ? (int)$isFrozenRaw : 0));
+            $isFrozen = $isFrozen ? 1 : 0;
+
+            $reason = null;
+            if ($isFrozen) {
+                $r = sanitize_input($payload['reason'] ?? '');
+                $r = is_string($r) ? trim($r) : '';
+                if ($r !== '') {
+                    if (mb_strlen($r) > 255) $r = mb_substr($r, 0, 255);
+                    $reason = $r;
+                }
+            }
+
+            nfa_ensure_branch_appointment_freeze_schema($pdo);
+            $actorId = (int)($_SESSION['user_id'] ?? $_SESSION['id'] ?? 0);
+            $frozenAt = $isFrozen ? date('Y-m-d H:i:s') : null;
+            $frozenBy = $isFrozen ? ($actorId > 0 ? $actorId : null) : null;
+
+            // Upsert per-branch freeze flag
+            $stmt = $pdo->prepare(
+                'INSERT INTO branch_appointment_freeze (branch_id, is_frozen, reason, frozen_by, frozen_at) '
+                . 'VALUES (?, ?, ?, ?, ?) '
+                . 'ON DUPLICATE KEY UPDATE is_frozen = VALUES(is_frozen), reason = VALUES(reason), frozen_by = VALUES(frozen_by), frozen_at = VALUES(frozen_at)'
+            );
+            $stmt->execute([$branch_id, $isFrozen, $reason, $frozenBy, $frozenAt]);
+
+            nfa_log_activity_best_effort(
+                $pdo,
+                $actorId,
+                $isFrozen ? 'Froze new appointments (warehouse intake paused)' : 'Unfroze new appointments (warehouse intake resumed)'
+            );
+
+            $freeze = nfa_get_effective_appointment_freeze($pdo, $branch_id);
+            echo json_encode(['success' => true, 'data' => $freeze]);
+        } catch (PDOException $e) {
+            http_response_code(500);
+            echo json_encode(['success' => false, 'error' => 'Failed to update freeze status.']);
         }
         break;
 
@@ -3196,6 +3931,14 @@ switch ($action) {
                 http_response_code(400);
                 echo json_encode(['success' => false, 'error' => 'Nothing to update.']);
                 break;
+            }
+
+            $reason = null;
+            if (array_key_exists('reason', $payload)) {
+                $reasonRaw = $payload['reason'];
+                if (is_string($reasonRaw)) {
+                    $reason = trim((string)sanitize_input($reasonRaw));
+                }
             }
 
             $newCapacity = null;
@@ -3271,8 +4014,27 @@ switch ($action) {
             $stmtUpdate = $pdo->prepare('UPDATE volume_capacity SET warehouse_capacity = ?, inventory = ? WHERE branch_id = ?');
             $stmtUpdate->execute([$finalCapacity, $finalInventory, $branch_id]);
 
+            // Audit trail (best-effort)
+            if (abs($finalCapacity - $currentCapacity) > 0.00001 || abs($finalInventory - $currentInventory) > 0.00001) {
+                $actorId = (int)($_SESSION['user_id'] ?? $_SESSION['id'] ?? 0);
+                $actorRole = (string)($_SESSION['user_type'] ?? '');
+                nfa_log_capacity_change_best_effort(
+                    $pdo,
+                    $branch_id,
+                    $currentCapacity,
+                    $finalCapacity,
+                    $currentInventory,
+                    $finalInventory,
+                    $actorId,
+                    $actorRole,
+                    $reason
+                );
+            }
+
             $available = max(0, $finalCapacity - $finalInventory);
             $percent = ($finalCapacity > 0) ? ($finalInventory / $finalCapacity) * 100 : 0;
+
+            $freeze = nfa_get_effective_appointment_freeze($pdo, $branch_id);
 
             echo json_encode([
                 'success' => true,
@@ -3281,7 +4043,8 @@ switch ($action) {
                     'warehouse_capacity' => $finalCapacity,
                     'inventory' => $finalInventory,
                     'available' => $available,
-                    'percent' => $percent
+                    'percent' => $percent,
+                    'appointment_freeze' => $freeze
                 ]
             ]);
 
@@ -3291,6 +4054,522 @@ switch ($action) {
             error_log('updateCapacityManagement failed: ' . $e->getMessage());
             http_response_code(500);
             echo json_encode(['success' => false, 'error' => 'Failed to update capacity.']);
+        }
+        break;
+
+    // --- Admin: Cross-branch capacity monitoring + audit trail ---
+    // --- Admin: Master data management (Regions + Farmer Types) ---
+    case 'adminListRegions':
+        try {
+            nfa_require_role('Admin');
+            $stmt = $pdo->query('SELECT region_id, region_name FROM regions ORDER BY region_name');
+            $rows = $stmt ? $stmt->fetchAll(PDO::FETCH_ASSOC) : [];
+            echo json_encode(['success' => true, 'data' => $rows]);
+        } catch (PDOException $e) {
+            http_response_code(500);
+            echo json_encode(['success' => false, 'error' => 'Failed to load regions']);
+        }
+        break;
+
+    case 'adminCreateRegion':
+        try {
+            nfa_require_role('Admin');
+            $payload = nfa_request_payload();
+            $name = sanitize_input($payload['region_name'] ?? '');
+            $name = is_string($name) ? trim($name) : '';
+            $initialBranchName = sanitize_input($payload['initial_branch_name'] ?? '');
+            $initialBranchName = is_string($initialBranchName) ? trim($initialBranchName) : '';
+            if ($name === '' || mb_strlen($name) > 255) {
+                http_response_code(400);
+                echo json_encode(['success' => false, 'error' => 'Region name is required (max 255 chars).']);
+                break;
+            }
+
+            // Requirement: when creating a new region, also create at least one branch under it.
+            if ($initialBranchName === '' || mb_strlen($initialBranchName) > 255) {
+                http_response_code(400);
+                echo json_encode(['success' => false, 'error' => 'Initial branch name is required (max 255 chars).']);
+                break;
+            }
+
+            $pdo->beginTransaction();
+
+            $stmt = $pdo->prepare('INSERT INTO regions (region_name) VALUES (?)');
+            $stmt->execute([$name]);
+            $newId = (int)$pdo->lastInsertId();
+
+            $stmtB = $pdo->prepare('INSERT INTO branch (region_id, branch_name) VALUES (?, ?)');
+            $stmtB->execute([$newId, $initialBranchName]);
+            $newBranchId = (int)$pdo->lastInsertId();
+
+            $pdo->commit();
+
+            $actorId = (int)($_SESSION['user_id'] ?? $_SESSION['id'] ?? 0);
+            nfa_log_activity_best_effort($pdo, $actorId, 'Created region: ' . $name . ' (branch: ' . $initialBranchName . ')');
+
+            echo json_encode(['success' => true, 'data' => ['region_id' => $newId, 'region_name' => $name, 'branch_id' => $newBranchId, 'branch_name' => $initialBranchName]]);
+        } catch (PDOException $e) {
+            try { if ($pdo->inTransaction()) $pdo->rollBack(); } catch (Exception $_) {}
+            http_response_code(500);
+            echo json_encode(['success' => false, 'error' => 'Failed to create region']);
+        }
+        break;
+
+    case 'adminUpdateRegion':
+        try {
+            nfa_require_role('Admin');
+            $payload = nfa_request_payload();
+            $regionId = (int)sanitize_input($payload['region_id'] ?? 0);
+            $name = sanitize_input($payload['region_name'] ?? '');
+            $name = is_string($name) ? trim($name) : '';
+            if ($regionId <= 0) {
+                http_response_code(400);
+                echo json_encode(['success' => false, 'error' => 'Missing region_id']);
+                break;
+            }
+            if ($name === '' || mb_strlen($name) > 255) {
+                http_response_code(400);
+                echo json_encode(['success' => false, 'error' => 'Region name is required (max 255 chars).']);
+                break;
+            }
+
+            $stmt = $pdo->prepare('UPDATE regions SET region_name = ? WHERE region_id = ?');
+            $stmt->execute([$name, $regionId]);
+
+            $actorId = (int)($_SESSION['user_id'] ?? $_SESSION['id'] ?? 0);
+            nfa_log_activity_best_effort($pdo, $actorId, 'Updated region #' . $regionId);
+
+            echo json_encode(['success' => true, 'data' => ['region_id' => $regionId, 'region_name' => $name]]);
+        } catch (PDOException $e) {
+            http_response_code(500);
+            echo json_encode(['success' => false, 'error' => 'Failed to update region']);
+        }
+        break;
+
+    case 'adminDeleteRegion':
+        try {
+            nfa_require_role('Admin');
+            $payload = nfa_request_payload();
+            $regionId = (int)sanitize_input($payload['region_id'] ?? 0);
+            if ($regionId <= 0) {
+                http_response_code(400);
+                echo json_encode(['success' => false, 'error' => 'Missing region_id']);
+                break;
+            }
+
+            // Safe delete: block if used by any branches (even though FK could cascade).
+            $stmt = $pdo->prepare('SELECT COUNT(*) FROM branch WHERE region_id = ?');
+            $stmt->execute([$regionId]);
+            $inUse = (int)$stmt->fetchColumn();
+            if ($inUse > 0) {
+                http_response_code(400);
+                echo json_encode(['success' => false, 'error' => 'Cannot delete region: it is linked to existing branches.']);
+                break;
+            }
+
+            $stmtName = $pdo->prepare('SELECT region_name FROM regions WHERE region_id = ?');
+            $stmtName->execute([$regionId]);
+            $oldName = (string)($stmtName->fetchColumn() ?: '');
+
+            $stmtDel = $pdo->prepare('DELETE FROM regions WHERE region_id = ?');
+            $stmtDel->execute([$regionId]);
+
+            $actorId = (int)($_SESSION['user_id'] ?? $_SESSION['id'] ?? 0);
+            nfa_log_activity_best_effort($pdo, $actorId, 'Deleted region #' . $regionId . ($oldName !== '' ? (': ' . $oldName) : ''));
+
+            echo json_encode(['success' => true]);
+        } catch (PDOException $e) {
+            http_response_code(500);
+            echo json_encode(['success' => false, 'error' => 'Failed to delete region']);
+        }
+        break;
+
+    case 'adminListFarmerTypes':
+        try {
+            nfa_require_role('Admin');
+            $stmt = $pdo->query('SELECT farmer_type_id, type_name FROM farmer_type ORDER BY type_name');
+            $rows = $stmt ? $stmt->fetchAll(PDO::FETCH_ASSOC) : [];
+            echo json_encode(['success' => true, 'data' => $rows]);
+        } catch (PDOException $e) {
+            http_response_code(500);
+            echo json_encode(['success' => false, 'error' => 'Failed to load farmer types']);
+        }
+        break;
+
+    case 'adminCreateFarmerType':
+        try {
+            nfa_require_role('Admin');
+            $payload = nfa_request_payload();
+            $name = sanitize_input($payload['type_name'] ?? '');
+            $name = is_string($name) ? trim($name) : '';
+            if ($name === '' || mb_strlen($name) > 50) {
+                http_response_code(400);
+                echo json_encode(['success' => false, 'error' => 'Type name is required (max 50 chars).']);
+                break;
+            }
+
+            $stmt = $pdo->prepare('INSERT INTO farmer_type (type_name) VALUES (?)');
+            $stmt->execute([$name]);
+            $newId = (int)$pdo->lastInsertId();
+
+            $actorId = (int)($_SESSION['user_id'] ?? $_SESSION['id'] ?? 0);
+            nfa_log_activity_best_effort($pdo, $actorId, 'Created farmer type: ' . $name);
+
+            echo json_encode(['success' => true, 'data' => ['farmer_type_id' => $newId, 'type_name' => $name]]);
+        } catch (PDOException $e) {
+            http_response_code(500);
+            echo json_encode(['success' => false, 'error' => 'Failed to create farmer type']);
+        }
+        break;
+
+    case 'adminUpdateFarmerType':
+        try {
+            nfa_require_role('Admin');
+            $payload = nfa_request_payload();
+            $typeId = (int)sanitize_input($payload['farmer_type_id'] ?? 0);
+            $name = sanitize_input($payload['type_name'] ?? '');
+            $name = is_string($name) ? trim($name) : '';
+            if ($typeId <= 0) {
+                http_response_code(400);
+                echo json_encode(['success' => false, 'error' => 'Missing farmer_type_id']);
+                break;
+            }
+            if ($name === '' || mb_strlen($name) > 50) {
+                http_response_code(400);
+                echo json_encode(['success' => false, 'error' => 'Type name is required (max 50 chars).']);
+                break;
+            }
+
+            $stmt = $pdo->prepare('UPDATE farmer_type SET type_name = ? WHERE farmer_type_id = ?');
+            $stmt->execute([$name, $typeId]);
+
+            $actorId = (int)($_SESSION['user_id'] ?? $_SESSION['id'] ?? 0);
+            nfa_log_activity_best_effort($pdo, $actorId, 'Updated farmer type #' . $typeId);
+
+            echo json_encode(['success' => true, 'data' => ['farmer_type_id' => $typeId, 'type_name' => $name]]);
+        } catch (PDOException $e) {
+            http_response_code(500);
+            echo json_encode(['success' => false, 'error' => 'Failed to update farmer type']);
+        }
+        break;
+
+    case 'adminDeleteFarmerType':
+        try {
+            nfa_require_role('Admin');
+            $payload = nfa_request_payload();
+            $typeId = (int)sanitize_input($payload['farmer_type_id'] ?? 0);
+            if ($typeId <= 0) {
+                http_response_code(400);
+                echo json_encode(['success' => false, 'error' => 'Missing farmer_type_id']);
+                break;
+            }
+
+            // Safe delete: block if used by any appointment.
+            if (nfa_table_exists($pdo, 'appointments')) {
+                $stmt = $pdo->prepare('SELECT COUNT(*) FROM appointments WHERE farmer_type_id = ?');
+                $stmt->execute([$typeId]);
+                $inUse = (int)$stmt->fetchColumn();
+                if ($inUse > 0) {
+                    http_response_code(400);
+                    echo json_encode(['success' => false, 'error' => 'Cannot delete farmer type: it is used by existing appointments.']);
+                    break;
+                }
+            }
+
+            $stmtName = $pdo->prepare('SELECT type_name FROM farmer_type WHERE farmer_type_id = ?');
+            $stmtName->execute([$typeId]);
+            $oldName = (string)($stmtName->fetchColumn() ?: '');
+
+            $stmtDel = $pdo->prepare('DELETE FROM farmer_type WHERE farmer_type_id = ?');
+            $stmtDel->execute([$typeId]);
+
+            $actorId = (int)($_SESSION['user_id'] ?? $_SESSION['id'] ?? 0);
+            nfa_log_activity_best_effort($pdo, $actorId, 'Deleted farmer type #' . $typeId . ($oldName !== '' ? (': ' . $oldName) : ''));
+
+            echo json_encode(['success' => true]);
+        } catch (PDOException $e) {
+            http_response_code(500);
+            echo json_encode(['success' => false, 'error' => 'Failed to delete farmer type']);
+        }
+        break;
+
+    // --- Branches (linked to regions) ---
+    case 'adminListBranches':
+        try {
+            nfa_require_role('Admin');
+            $regionId = (int)sanitize_input($_GET['region_id'] ?? 0);
+            $where = '';
+            $params = [];
+            if ($regionId > 0) {
+                $where = 'WHERE b.region_id = ?';
+                $params[] = $regionId;
+            }
+
+            $stmt = $pdo->prepare(
+                'SELECT b.branch_id, b.branch_name, b.region_id, r.region_name, b.address, b.contact_number, b.website_link '
+                . 'FROM branch b '
+                . 'JOIN regions r ON r.region_id = b.region_id '
+                . $where
+                . ' ORDER BY r.region_name, b.branch_name'
+            );
+            $stmt->execute($params);
+            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            echo json_encode(['success' => true, 'data' => $rows ?: []]);
+        } catch (PDOException $e) {
+            http_response_code(500);
+            echo json_encode(['success' => false, 'error' => 'Failed to load branches']);
+        }
+        break;
+
+    case 'adminCreateBranch':
+        try {
+            nfa_require_role('Admin');
+            $payload = nfa_request_payload();
+            $regionId = (int)sanitize_input($payload['region_id'] ?? 0);
+            $branchName = sanitize_input($payload['branch_name'] ?? '');
+            $branchName = is_string($branchName) ? trim($branchName) : '';
+            $address = sanitize_input($payload['address'] ?? '');
+            $address = is_string($address) ? trim($address) : '';
+            $contact = sanitize_input($payload['contact_number'] ?? '');
+            $contact = is_string($contact) ? trim($contact) : '';
+            $website = sanitize_input($payload['website_link'] ?? '');
+            $website = is_string($website) ? trim($website) : '';
+
+            if ($regionId <= 0) {
+                http_response_code(400);
+                echo json_encode(['success' => false, 'error' => 'Region is required.']);
+                break;
+            }
+            if ($branchName === '' || mb_strlen($branchName) > 255) {
+                http_response_code(400);
+                echo json_encode(['success' => false, 'error' => 'Branch name is required (max 255 chars).']);
+                break;
+            }
+
+            // Ensure region exists
+            $stmtR = $pdo->prepare('SELECT 1 FROM regions WHERE region_id = ?');
+            $stmtR->execute([$regionId]);
+            if (!$stmtR->fetchColumn()) {
+                http_response_code(400);
+                echo json_encode(['success' => false, 'error' => 'Region not found.']);
+                break;
+            }
+
+            $stmt = $pdo->prepare('INSERT INTO branch (region_id, branch_name, address, contact_number, website_link) VALUES (?, ?, ?, ?, ?)');
+            $stmt->execute([
+                $regionId,
+                $branchName,
+                $address !== '' ? $address : null,
+                $contact !== '' ? $contact : null,
+                $website !== '' ? $website : null
+            ]);
+            $newId = (int)$pdo->lastInsertId();
+
+            $actorId = (int)($_SESSION['user_id'] ?? $_SESSION['id'] ?? 0);
+            nfa_log_activity_best_effort($pdo, $actorId, 'Created branch #' . $newId . ': ' . $branchName);
+
+            echo json_encode(['success' => true, 'data' => ['branch_id' => $newId, 'region_id' => $regionId, 'branch_name' => $branchName]]);
+        } catch (PDOException $e) {
+            http_response_code(500);
+            echo json_encode(['success' => false, 'error' => 'Failed to create branch']);
+        }
+        break;
+
+    case 'adminUpdateBranch':
+        try {
+            nfa_require_role('Admin');
+            $payload = nfa_request_payload();
+            $branchId = (int)sanitize_input($payload['branch_id'] ?? 0);
+            $branchName = sanitize_input($payload['branch_name'] ?? '');
+            $branchName = is_string($branchName) ? trim($branchName) : '';
+
+            if ($branchId <= 0) {
+                http_response_code(400);
+                echo json_encode(['success' => false, 'error' => 'Missing branch_id']);
+                break;
+            }
+            if ($branchName === '' || mb_strlen($branchName) > 255) {
+                http_response_code(400);
+                echo json_encode(['success' => false, 'error' => 'Branch name is required (max 255 chars).']);
+                break;
+            }
+
+            $stmt = $pdo->prepare('UPDATE branch SET branch_name = ? WHERE branch_id = ?');
+            $stmt->execute([$branchName, $branchId]);
+
+            $actorId = (int)($_SESSION['user_id'] ?? $_SESSION['id'] ?? 0);
+            nfa_log_activity_best_effort($pdo, $actorId, 'Updated branch #' . $branchId);
+
+            echo json_encode(['success' => true, 'data' => ['branch_id' => $branchId, 'branch_name' => $branchName]]);
+        } catch (PDOException $e) {
+            http_response_code(500);
+            echo json_encode(['success' => false, 'error' => 'Failed to update branch']);
+        }
+        break;
+
+    case 'adminDeleteBranch':
+        try {
+            nfa_require_role('Admin');
+            $payload = nfa_request_payload();
+            $branchId = (int)sanitize_input($payload['branch_id'] ?? 0);
+            if ($branchId <= 0) {
+                http_response_code(400);
+                echo json_encode(['success' => false, 'error' => 'Missing branch_id']);
+                break;
+            }
+
+            // Safe delete: block if referenced anywhere important.
+            $refChecks = [
+                ['appointments', 'branch_id', 'appointments'],
+                ['volume_capacity', 'branch_id', 'volume capacity'],
+                ['branch_slot_capacity', 'branch_id', 'slot capacity'],
+                ['stock_history', 'branch_id', 'stock history'],
+                ['users', 'branch_id', 'users'],
+                ['support_chats', 'branch_id', 'support chats'],
+                ['capacity_change_logs', 'branch_id', 'capacity audit logs'],
+            ];
+
+            foreach ($refChecks as $chk) {
+                [$table, $col, $label] = $chk;
+                if (!nfa_table_exists($pdo, $table)) continue;
+                try {
+                    $stmt = $pdo->prepare("SELECT COUNT(*) FROM `{$table}` WHERE `{$col}` = ?");
+                    $stmt->execute([$branchId]);
+                    $c = (int)$stmt->fetchColumn();
+                    if ($c > 0) {
+                        http_response_code(400);
+                        echo json_encode(['success' => false, 'error' => 'Cannot delete branch: it is referenced by ' . $label . '.']);
+                        break 2;
+                    }
+                } catch (PDOException $e) {
+                    // If a check fails, be conservative and block deletion.
+                    http_response_code(400);
+                    echo json_encode(['success' => false, 'error' => 'Cannot delete branch: reference check failed for ' . $label . '.']);
+                    break 2;
+                }
+            }
+
+            $stmtName = $pdo->prepare('SELECT branch_name FROM branch WHERE branch_id = ?');
+            $stmtName->execute([$branchId]);
+            $oldName = (string)($stmtName->fetchColumn() ?: '');
+
+            $stmtDel = $pdo->prepare('DELETE FROM branch WHERE branch_id = ?');
+            $stmtDel->execute([$branchId]);
+
+            $actorId = (int)($_SESSION['user_id'] ?? $_SESSION['id'] ?? 0);
+            nfa_log_activity_best_effort($pdo, $actorId, 'Deleted branch #' . $branchId . ($oldName !== '' ? (': ' . $oldName) : ''));
+
+            echo json_encode(['success' => true]);
+        } catch (PDOException $e) {
+            http_response_code(500);
+            echo json_encode(['success' => false, 'error' => 'Failed to delete branch']);
+        }
+        break;
+
+    case 'adminListBranchCapacities':
+        try {
+            nfa_require_role('Admin');
+
+            $regionId = (int)sanitize_input($_GET['region_id'] ?? 0);
+            $where = '';
+            $params = [];
+            if ($regionId > 0) {
+                $where = 'WHERE b.region_id = ?';
+                $params[] = $regionId;
+            }
+
+            $stmt = $pdo->prepare(
+                "SELECT b.branch_id, b.branch_name, r.region_id, r.region_name, " .
+                "       COALESCE(v.warehouse_capacity, 0) AS warehouse_capacity, " .
+                "       COALESCE(v.inventory, 0) AS inventory " .
+                "FROM branch b " .
+                "JOIN regions r ON r.region_id = b.region_id " .
+                "LEFT JOIN volume_capacity v ON v.branch_id = b.branch_id " .
+                $where .
+                " ORDER BY r.region_name, b.branch_name"
+            );
+            $stmt->execute($params);
+            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+            $out = array_map(function ($r) {
+                $cap = (float)($r['warehouse_capacity'] ?? 0);
+                $inv = (float)($r['inventory'] ?? 0);
+                $avail = max(0, $cap - $inv);
+                $pct = ($cap > 0) ? ($inv / $cap) * 100 : 0;
+                return [
+                    'region_id' => (int)($r['region_id'] ?? 0),
+                    'region_name' => (string)($r['region_name'] ?? ''),
+                    'branch_id' => (int)($r['branch_id'] ?? 0),
+                    'branch_name' => (string)($r['branch_name'] ?? ''),
+                    'warehouse_capacity' => $cap,
+                    'inventory' => $inv,
+                    'available' => $avail,
+                    'percent' => $pct,
+                ];
+            }, $rows ?: []);
+
+            echo json_encode(['success' => true, 'data' => $out]);
+        } catch (PDOException $e) {
+            http_response_code(500);
+            echo json_encode(['success' => false, 'error' => 'Failed to load branch capacities']);
+        }
+        break;
+
+    case 'adminListCapacityChangeLogs':
+        try {
+            nfa_require_role('Admin');
+            $branchId = (int)sanitize_input($_GET['branch_id'] ?? 0);
+            $limit = (int)sanitize_input($_GET['limit'] ?? 200);
+            if ($limit <= 0) $limit = 200;
+            if ($limit > 500) $limit = 500;
+
+            $where = [];
+            $params = [];
+            if ($branchId > 0) {
+                $where[] = 'l.branch_id = ?';
+                $params[] = $branchId;
+            }
+
+            $whereSql = count($where) ? ('WHERE ' . implode(' AND ', $where)) : '';
+
+            $stmt = $pdo->prepare(
+                "SELECT l.id, l.changed_at, l.branch_id, b.branch_name, r.region_name, " .
+                "       l.changed_by_user_id, l.changed_by_role, u.username, u.first_name, u.last_name, " .
+                "       l.old_warehouse_capacity, l.new_warehouse_capacity, l.old_inventory, l.new_inventory, l.reason " .
+                "FROM capacity_change_logs l " .
+                "LEFT JOIN branch b ON b.branch_id = l.branch_id " .
+                "LEFT JOIN regions r ON r.region_id = b.region_id " .
+                "LEFT JOIN users u ON u.user_id = l.changed_by_user_id " .
+                $whereSql .
+                " ORDER BY l.changed_at DESC, l.id DESC LIMIT " . (int)$limit
+            );
+            $stmt->execute($params);
+            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+            $out = array_map(function ($r) {
+                $who = trim((string)($r['first_name'] ?? '') . ' ' . (string)($r['last_name'] ?? ''));
+                if ($who === '') $who = (string)($r['username'] ?? '');
+                if ($who === '') $who = 'Unknown';
+                return [
+                    'id' => (int)($r['id'] ?? 0),
+                    'changed_at' => (string)($r['changed_at'] ?? ''),
+                    'region_name' => (string)($r['region_name'] ?? ''),
+                    'branch_id' => (int)($r['branch_id'] ?? 0),
+                    'branch_name' => (string)($r['branch_name'] ?? ''),
+                    'changed_by' => $who,
+                    'changed_by_role' => (string)($r['changed_by_role'] ?? ''),
+                    'old_warehouse_capacity' => (float)($r['old_warehouse_capacity'] ?? 0),
+                    'new_warehouse_capacity' => (float)($r['new_warehouse_capacity'] ?? 0),
+                    'old_inventory' => (float)($r['old_inventory'] ?? 0),
+                    'new_inventory' => (float)($r['new_inventory'] ?? 0),
+                    'reason' => (string)($r['reason'] ?? ''),
+                ];
+            }, $rows ?: []);
+
+            echo json_encode(['success' => true, 'data' => $out]);
+        } catch (PDOException $e) {
+            http_response_code(500);
+            echo json_encode(['success' => false, 'error' => 'Failed to load capacity change logs']);
         }
         break;
 
@@ -3872,6 +5151,574 @@ switch ($action) {
             error_log('exportReportsCsv failed: ' . $e->getMessage());
             http_response_code(500);
             echo json_encode(['success' => false, 'error' => 'Failed to export CSV.']);
+        }
+        break;
+
+    // --- Support Chat (Public/Farmer) ---
+    case 'listSupportRegions':
+        try {
+            // Public endpoint
+            $rows = [];
+            if (nfa_table_exists($pdo, 'regions')) {
+                $stmt = $pdo->query('SELECT region_id, region_name FROM regions ORDER BY region_name');
+                $rows = $stmt ? $stmt->fetchAll(PDO::FETCH_ASSOC) : [];
+            }
+            echo json_encode(['success' => true, 'regions' => $rows]);
+        } catch (PDOException $e) {
+            http_response_code(500);
+            echo json_encode(['success' => false, 'error' => 'Failed to load regions']);
+        }
+        break;
+
+    case 'listSupportBranches':
+        try {
+            $region_id = (int)sanitize_input($_GET['region_id'] ?? 0);
+            if ($region_id <= 0) {
+                echo json_encode(['success' => true, 'branches' => []]);
+                break;
+            }
+            $rows = [];
+            if (nfa_table_exists($pdo, 'branch')) {
+                $stmt = $pdo->prepare('SELECT branch_id, branch_name FROM branch WHERE region_id = ? ORDER BY branch_name');
+                $stmt->execute([$region_id]);
+                $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            }
+            echo json_encode(['success' => true, 'branches' => $rows]);
+        } catch (PDOException $e) {
+            http_response_code(500);
+            echo json_encode(['success' => false, 'error' => 'Failed to load branches']);
+        }
+        break;
+
+    case 'startSupportChat':
+        try {
+            $data = nfa_request_payload();
+            $origin = strtolower((string)sanitize_input($data['origin'] ?? ''));
+            if ($origin !== 'farmer') {
+                http_response_code(400);
+                echo json_encode(['success' => false, 'error' => 'Invalid origin']);
+                break;
+            }
+
+            $region_id = (int)sanitize_input($data['region_id'] ?? 0);
+            $branch_id = (int)sanitize_input($data['branch_id'] ?? 0);
+            if ($region_id <= 0 || $branch_id <= 0) {
+                http_response_code(400);
+                echo json_encode(['success' => false, 'error' => 'Missing region/branch']);
+                break;
+            }
+
+            $displayName = trim((string)sanitize_input($data['display_name'] ?? ''));
+            $contact = trim((string)sanitize_input($data['contact'] ?? ''));
+            if (strlen($displayName) > 120) $displayName = substr($displayName, 0, 120);
+            if (strlen($contact) > 160) $contact = substr($contact, 0, 160);
+
+            $token = nfa_random_token(18);
+            $stmt = $pdo->prepare(
+                'INSERT INTO support_chats (chat_token, origin, status, region_id, branch_id, farmer_display_name, farmer_contact, last_activity_at) ' .
+                'VALUES (?, ?, \'open\', ?, ?, ?, ?, NOW())'
+            );
+            $stmt->execute([$token, 'farmer', $region_id, $branch_id, ($displayName !== '' ? $displayName : null), ($contact !== '' ? $contact : null)]);
+
+            $chatId = (int)$pdo->lastInsertId();
+            // System greeting
+            $pdo->prepare('INSERT INTO support_chat_messages (chat_id, sender_role, sender_user_id, message) VALUES (?, ?, NULL, ?)')
+                ->execute([$chatId, 'system', 'You are now connected. Please type your concern.']);
+
+            echo json_encode(['success' => true, 'token' => $token]);
+        } catch (PDOException $e) {
+            error_log('startSupportChat failed: ' . $e->getMessage());
+            http_response_code(500);
+            $resp = ['success' => false, 'error' => 'Failed to start chat'];
+            if (isset($_GET['debug']) && $_GET['debug'] == '1') {
+                $resp['debug'] = $e->getMessage();
+            }
+            echo json_encode($resp);
+        }
+        break;
+
+    case 'sendSupportChatMessage':
+        try {
+            $data = nfa_request_payload();
+            $token = (string)sanitize_input($data['token'] ?? '');
+            $msg = trim((string)sanitize_input($data['message'] ?? ''));
+            if ($token === '' || $msg === '') {
+                http_response_code(400);
+                echo json_encode(['success' => false, 'error' => 'Missing token/message']);
+                break;
+            }
+            if (strlen($msg) > 1200) $msg = substr($msg, 0, 1200);
+
+            $chat = nfa_support_chat_fetch_by_token($pdo, $token);
+            if (!$chat) {
+                http_response_code(404);
+                echo json_encode(['success' => false, 'error' => 'Chat not found']);
+                break;
+            }
+            if (!nfa_support_chat_is_open($chat)) {
+                http_response_code(409);
+                echo json_encode(['success' => false, 'error' => 'This chat session has already ended.']);
+                break;
+            }
+
+            $chatId = (int)$chat['chat_id'];
+            $pdo->prepare('INSERT INTO support_chat_messages (chat_id, sender_role, sender_user_id, message) VALUES (?, ?, NULL, ?)')
+                ->execute([$chatId, 'farmer', $msg]);
+            $pdo->prepare('UPDATE support_chats SET last_activity_at = NOW() WHERE chat_id = ?')->execute([$chatId]);
+
+            echo json_encode(['success' => true]);
+        } catch (PDOException $e) {
+            error_log('sendSupportChatMessage failed: ' . $e->getMessage());
+            http_response_code(500);
+            $resp = ['success' => false, 'error' => 'Failed to send message'];
+            if (isset($_GET['debug']) && $_GET['debug'] == '1') {
+                $resp['debug'] = $e->getMessage();
+            }
+            echo json_encode($resp);
+        }
+        break;
+
+    case 'getSupportChatMessages':
+        try {
+            $token = (string)sanitize_input($_GET['token'] ?? '');
+            $since_id = (int)sanitize_input($_GET['since_id'] ?? 0);
+            $chat = nfa_support_chat_fetch_by_token($pdo, $token);
+            if (!$chat) {
+                http_response_code(404);
+                echo json_encode(['success' => false, 'error' => 'Chat not found']);
+                break;
+            }
+
+            $chatId = (int)$chat['chat_id'];
+            $stmt = $pdo->prepare(
+                'SELECT id, sender_role, message, created_at ' .
+                'FROM support_chat_messages ' .
+                'WHERE chat_id = ? AND id > ? ' .
+                'ORDER BY id ASC ' .
+                'LIMIT 200'
+            );
+            $stmt->execute([$chatId, max(0, $since_id)]);
+            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+            $lastId = $since_id;
+            foreach ($rows as $r) {
+                $id = (int)($r['id'] ?? 0);
+                if ($id > $lastId) $lastId = $id;
+            }
+
+            $messages = array_map(function ($r) {
+                $role = (string)($r['sender_role'] ?? '');
+                $label = $role === 'system' ? 'System' : ($role === 'farmer' ? 'You' : 'Staff');
+                return [
+                    'id' => (int)($r['id'] ?? 0),
+                    'sender_role' => $role,
+                    'sender_label' => $label,
+                    'message' => (string)($r['message'] ?? ''),
+                    'created_at' => (string)($r['created_at'] ?? '')
+                ];
+            }, $rows);
+
+            echo json_encode([
+                'success' => true,
+                'status' => strtolower((string)($chat['status'] ?? 'open')),
+                'closed_reason' => (string)($chat['closed_reason'] ?? ''),
+                'closed_by_role' => (string)($chat['closed_by_role'] ?? ''),
+                'messages' => $messages,
+                'last_id' => $lastId
+            ]);
+        } catch (PDOException $e) {
+            http_response_code(500);
+            echo json_encode(['success' => false, 'error' => 'Failed to load messages']);
+        }
+        break;
+
+    case 'closeSupportChat':
+        try {
+            $data = nfa_request_payload();
+            $token = (string)sanitize_input($data['token'] ?? '');
+            $chat = nfa_support_chat_fetch_by_token($pdo, $token);
+            if (!$chat) {
+                echo json_encode(['success' => true]);
+                break;
+            }
+            $chatId = (int)$chat['chat_id'];
+            nfa_support_chat_close(
+                $pdo,
+                $chatId,
+                'farmer',
+                'ended',
+                'You have ended this chat session. If you still need assistance, please start a new chat.'
+            );
+            echo json_encode(['success' => true]);
+        } catch (PDOException $e) {
+            http_response_code(500);
+            echo json_encode(['success' => false, 'error' => 'Failed to close chat']);
+        }
+        break;
+
+    // --- Support Chat (Staff Inbox) ---
+    case 'staffListSupportChats':
+        try {
+            nfa_support_chat_require_staff();
+            $userType = (string)($_SESSION['user_type'] ?? '');
+            $userId = (int)($_SESSION['user_id'] ?? $_SESSION['id'] ?? 0);
+            $branchId = (int)($_SESSION['branch_id'] ?? 0);
+
+            $rows = [];
+            if ($userType === 'Processor') {
+                $stmt = $pdo->prepare(
+                    "SELECT\n" .
+                    "  c.chat_id, c.origin, c.created_at, c.last_activity_at, c.farmer_display_name, c.farmer_contact,\n" .
+                    "  b.branch_name, r.region_name,\n" .
+                    "  lm.sender_role AS last_sender_role\n" .
+                    "FROM support_chats c\n" .
+                    "LEFT JOIN branch b ON c.branch_id = b.branch_id\n" .
+                    "LEFT JOIN regions r ON c.region_id = r.region_id\n" .
+                    "LEFT JOIN (\n" .
+                    "  SELECT m.chat_id, m.sender_role\n" .
+                    "  FROM support_chat_messages m\n" .
+                    "  INNER JOIN (\n" .
+                    "    SELECT chat_id, MAX(id) AS max_id\n" .
+                    "    FROM support_chat_messages\n" .
+                    "    WHERE sender_role <> 'system'\n" .
+                    "    GROUP BY chat_id\n" .
+                    "  ) x ON x.chat_id = m.chat_id AND x.max_id = m.id\n" .
+                    ") lm ON lm.chat_id = c.chat_id\n" .
+                    "WHERE c.status = 'open' AND c.origin = 'farmer' AND c.branch_id = ?\n" .
+                    "ORDER BY c.last_activity_at DESC\n" .
+                    "LIMIT 50"
+                );
+                $stmt->execute([$branchId]);
+                $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            } else {
+                $stmt = $pdo->query(
+                    "SELECT\n" .
+                    "  c.chat_id, c.origin, c.created_at, c.last_activity_at, c.processor_user_id,\n" .
+                    "  u.first_name, u.last_name, u.username,\n" .
+                    "  lm.sender_role AS last_sender_role\n" .
+                    "FROM support_chats c\n" .
+                    "LEFT JOIN users u ON c.processor_user_id = u.user_id\n" .
+                    "LEFT JOIN (\n" .
+                    "  SELECT m.chat_id, m.sender_role\n" .
+                    "  FROM support_chat_messages m\n" .
+                    "  INNER JOIN (\n" .
+                    "    SELECT chat_id, MAX(id) AS max_id\n" .
+                    "    FROM support_chat_messages\n" .
+                    "    WHERE sender_role <> 'system'\n" .
+                    "    GROUP BY chat_id\n" .
+                    "  ) x ON x.chat_id = m.chat_id AND x.max_id = m.id\n" .
+                    ") lm ON lm.chat_id = c.chat_id\n" .
+                    "WHERE c.status = 'open' AND c.origin = 'processor'\n" .
+                    "ORDER BY c.last_activity_at DESC\n" .
+                    "LIMIT 80"
+                );
+                $rows = $stmt ? $stmt->fetchAll(PDO::FETCH_ASSOC) : [];
+            }
+
+            $out = array_map(function ($r) use ($userType) {
+                $chatId = (int)($r['chat_id'] ?? 0);
+                $origin = (string)($r['origin'] ?? '');
+                $last = (string)($r['last_activity_at'] ?? ($r['created_at'] ?? ''));
+                $lastSenderRole = strtolower(trim((string)($r['last_sender_role'] ?? '')));
+
+                if ($userType === 'Processor') {
+                    $who = trim((string)($r['farmer_display_name'] ?? ''));
+                    if ($who === '') $who = 'Farmer';
+                    $branch = trim((string)($r['branch_name'] ?? ''));
+                    $region = trim((string)($r['region_name'] ?? ''));
+                    $title = $who;
+                    $subtitleParts = [];
+                    if ($region !== '') $subtitleParts[] = $region;
+                    if ($branch !== '') $subtitleParts[] = $branch;
+                    $subtitleParts[] = 'Last: ' . $last;
+
+                    // Treat as "unread / needs reply" if the latest non-system message is from the farmer
+                    // (or there are no non-system messages yet).
+                    $needsReply = ($lastSenderRole === '' || $lastSenderRole === 'farmer') ? 1 : 0;
+                    return [
+                        'chat_id' => $chatId,
+                        'origin' => $origin,
+                        'title' => $title,
+                        'subtitle' => implode(' • ', $subtitleParts),
+                        'needs_reply' => $needsReply,
+                    ];
+                }
+
+                $who = trim((string)($r['first_name'] ?? '') . ' ' . (string)($r['last_name'] ?? ''));
+                if ($who === '') $who = (string)($r['username'] ?? 'Processor');
+                $title = $who;
+                $subtitle = 'Processor Support • Last: ' . $last;
+
+                // For Admin: "unread / needs reply" if the latest non-system message is from the processor
+                // (or there are no non-system messages yet).
+                $needsReply = ($lastSenderRole === '' || $lastSenderRole === 'processor') ? 1 : 0;
+                return [
+                    'chat_id' => $chatId,
+                    'origin' => $origin,
+                    'title' => $title,
+                    'subtitle' => $subtitle,
+                    'needs_reply' => $needsReply,
+                ];
+            }, $rows);
+
+            echo json_encode(['success' => true, 'chats' => $out]);
+        } catch (PDOException $e) {
+            http_response_code(500);
+            echo json_encode(['success' => false, 'error' => 'Failed to load chats']);
+        }
+        break;
+
+    case 'staffSupportChatNotificationSummary':
+        try {
+            nfa_support_chat_require_staff();
+            $userType = (string)($_SESSION['user_type'] ?? '');
+            $userId = (int)($_SESSION['user_id'] ?? $_SESSION['id'] ?? 0);
+            $branchId = (int)($_SESSION['branch_id'] ?? 0);
+
+            // Open chats count + chats needing reply.
+            // "Needs reply" is based on the latest non-system message (if none, treat as needing reply).
+            $openCount = 0;
+            $needsReplyCount = 0;
+
+            if ($userType === 'Processor') {
+                $stmt = $pdo->prepare(
+                    "SELECT\n" .
+                    "  COUNT(*) AS open_count,\n" .
+                    "  SUM(CASE WHEN lm.sender_role IS NULL OR lm.sender_role = 'farmer' THEN 1 ELSE 0 END) AS needs_reply_count\n" .
+                    "FROM support_chats c\n" .
+                    "LEFT JOIN (\n" .
+                    "  SELECT m.chat_id, m.sender_role\n" .
+                    "  FROM support_chat_messages m\n" .
+                    "  INNER JOIN (\n" .
+                    "    SELECT chat_id, MAX(id) AS max_id\n" .
+                    "    FROM support_chat_messages\n" .
+                    "    WHERE sender_role <> 'system'\n" .
+                    "    GROUP BY chat_id\n" .
+                    "  ) x ON x.chat_id = m.chat_id AND x.max_id = m.id\n" .
+                    ") lm ON lm.chat_id = c.chat_id\n" .
+                    "WHERE c.status = 'open' AND c.origin = 'farmer' AND c.branch_id = ?"
+                );
+                $stmt->execute([$branchId]);
+                $row = $stmt->fetch(PDO::FETCH_ASSOC) ?: [];
+                $openCount = (int)($row['open_count'] ?? 0);
+                $needsReplyCount = (int)($row['needs_reply_count'] ?? 0);
+            } else {
+                // Admin notifications focus on processor-origin chats.
+                $stmt = $pdo->query(
+                    "SELECT\n" .
+                    "  COUNT(*) AS open_count,\n" .
+                    "  SUM(CASE WHEN lm.sender_role IS NULL OR lm.sender_role = 'processor' THEN 1 ELSE 0 END) AS needs_reply_count\n" .
+                    "FROM support_chats c\n" .
+                    "LEFT JOIN (\n" .
+                    "  SELECT m.chat_id, m.sender_role\n" .
+                    "  FROM support_chat_messages m\n" .
+                    "  INNER JOIN (\n" .
+                    "    SELECT chat_id, MAX(id) AS max_id\n" .
+                    "    FROM support_chat_messages\n" .
+                    "    WHERE sender_role <> 'system'\n" .
+                    "    GROUP BY chat_id\n" .
+                    "  ) x ON x.chat_id = m.chat_id AND x.max_id = m.id\n" .
+                    ") lm ON lm.chat_id = c.chat_id\n" .
+                    "WHERE c.status = 'open' AND c.origin = 'processor'"
+                );
+                $row = $stmt ? ($stmt->fetch(PDO::FETCH_ASSOC) ?: []) : [];
+                $openCount = (int)($row['open_count'] ?? 0);
+                $needsReplyCount = (int)($row['needs_reply_count'] ?? 0);
+            }
+
+            echo json_encode([
+                'success' => true,
+                'open_count' => $openCount,
+                'needs_reply_count' => $needsReplyCount
+            ]);
+        } catch (PDOException $e) {
+            http_response_code(500);
+            echo json_encode(['success' => false, 'error' => 'Failed to load support chat summary']);
+        }
+        break;
+
+    case 'staffGetSupportChatMessages':
+        try {
+            nfa_support_chat_require_staff();
+            $userType = (string)($_SESSION['user_type'] ?? '');
+            $userId = (int)($_SESSION['user_id'] ?? $_SESSION['id'] ?? 0);
+            $branchId = (int)($_SESSION['branch_id'] ?? 0);
+
+            $chatId = (int)sanitize_input($_GET['chat_id'] ?? 0);
+            $since_id = (int)sanitize_input($_GET['since_id'] ?? 0);
+            $chat = nfa_support_chat_fetch_by_id($pdo, $chatId);
+            if (!$chat) {
+                http_response_code(404);
+                echo json_encode(['success' => false, 'error' => 'Chat not found']);
+                break;
+            }
+            if (!nfa_support_chat_staff_can_access($chat, $userType, $userId, $branchId)) {
+                http_response_code(403);
+                echo json_encode(['success' => false, 'error' => 'Forbidden']);
+                break;
+            }
+
+            $stmt = $pdo->prepare(
+                'SELECT id, sender_role, sender_user_id, message, created_at ' .
+                'FROM support_chat_messages ' .
+                'WHERE chat_id = ? AND id > ? ' .
+                'ORDER BY id ASC ' .
+                'LIMIT 400'
+            );
+            $stmt->execute([$chatId, max(0, $since_id)]);
+            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+            $lastId = $since_id;
+            foreach ($rows as $r) {
+                $id = (int)($r['id'] ?? 0);
+                if ($id > $lastId) $lastId = $id;
+            }
+
+            $messages = array_map(function ($r) {
+                $role = strtolower((string)($r['sender_role'] ?? ''));
+                $label = $role === 'admin' ? 'Admin' : ($role === 'processor' ? 'Processor' : ($role === 'farmer' ? 'Farmer' : 'System'));
+                return [
+                    'id' => (int)($r['id'] ?? 0),
+                    'sender_role' => $role,
+                    'sender_label' => $label,
+                    'message' => (string)($r['message'] ?? ''),
+                    'created_at' => (string)($r['created_at'] ?? '')
+                ];
+            }, $rows);
+
+            echo json_encode([
+                'success' => true,
+                'status' => strtolower((string)($chat['status'] ?? 'open')),
+                'closed_reason' => (string)($chat['closed_reason'] ?? ''),
+                'closed_by_role' => (string)($chat['closed_by_role'] ?? ''),
+                'messages' => $messages,
+                'last_id' => $lastId
+            ]);
+        } catch (PDOException $e) {
+            http_response_code(500);
+            echo json_encode(['success' => false, 'error' => 'Failed to load messages']);
+        }
+        break;
+
+    case 'staffSendSupportChatMessage':
+        try {
+            nfa_support_chat_require_staff();
+            $userType = (string)($_SESSION['user_type'] ?? '');
+            $userId = (int)($_SESSION['user_id'] ?? $_SESSION['id'] ?? 0);
+            $branchId = (int)($_SESSION['branch_id'] ?? 0);
+
+            $data = nfa_request_payload();
+            $chatId = (int)sanitize_input($data['chat_id'] ?? 0);
+            $msg = trim((string)sanitize_input($data['message'] ?? ''));
+            if ($chatId <= 0 || $msg === '') {
+                http_response_code(400);
+                echo json_encode(['success' => false, 'error' => 'Missing chat/message']);
+                break;
+            }
+            if (strlen($msg) > 1200) $msg = substr($msg, 0, 1200);
+
+            $chat = nfa_support_chat_fetch_by_id($pdo, $chatId);
+            if (!$chat) {
+                http_response_code(404);
+                echo json_encode(['success' => false, 'error' => 'Chat not found']);
+                break;
+            }
+            if (!nfa_support_chat_is_open($chat)) {
+                http_response_code(409);
+                echo json_encode(['success' => false, 'error' => 'This chat session has already ended.']);
+                break;
+            }
+            if (!nfa_support_chat_staff_can_access($chat, $userType, $userId, $branchId)) {
+                http_response_code(403);
+                echo json_encode(['success' => false, 'error' => 'Forbidden']);
+                break;
+            }
+
+            $senderRole = strtolower($userType) === 'admin' ? 'admin' : 'processor';
+            $pdo->prepare('INSERT INTO support_chat_messages (chat_id, sender_role, sender_user_id, message) VALUES (?, ?, ?, ?)')
+                ->execute([$chatId, $senderRole, $userId > 0 ? $userId : null, $msg]);
+            $pdo->prepare('UPDATE support_chats SET last_activity_at = NOW() WHERE chat_id = ?')->execute([$chatId]);
+
+            echo json_encode(['success' => true]);
+        } catch (PDOException $e) {
+            http_response_code(500);
+            echo json_encode(['success' => false, 'error' => 'Failed to send message']);
+        }
+        break;
+
+    case 'staffCloseSupportChat':
+        try {
+            nfa_support_chat_require_staff();
+            $userType = (string)($_SESSION['user_type'] ?? '');
+            $userId = (int)($_SESSION['user_id'] ?? $_SESSION['id'] ?? 0);
+            $branchId = (int)($_SESSION['branch_id'] ?? 0);
+
+            $data = nfa_request_payload();
+            $chatId = (int)sanitize_input($data['chat_id'] ?? 0);
+            $chat = nfa_support_chat_fetch_by_id($pdo, $chatId);
+            if (!$chat) {
+                echo json_encode(['success' => true]);
+                break;
+            }
+            if (!nfa_support_chat_staff_can_access($chat, $userType, $userId, $branchId)) {
+                http_response_code(403);
+                echo json_encode(['success' => false, 'error' => 'Forbidden']);
+                break;
+            }
+
+            $byRole = (strtolower($userType) === 'admin') ? 'admin' : 'processor';
+            $msg = ($byRole === 'processor')
+                ? 'This chat session has been ended by the processor. If you still need assistance, please start a new chat.'
+                : 'This chat session has been ended by the admin. If you still need assistance, please start a new chat.';
+            nfa_support_chat_close($pdo, (int)$chatId, $byRole, 'ended_by_' . $byRole, $msg);
+
+            echo json_encode(['success' => true]);
+        } catch (PDOException $e) {
+            http_response_code(500);
+            echo json_encode(['success' => false, 'error' => 'Failed to close chat']);
+        }
+        break;
+
+    case 'staffStartSupportChat':
+        // Staff-only start chat (currently used for Processor -> Admin)
+        try {
+            nfa_support_chat_require_staff();
+
+            $userType = (string)($_SESSION['user_type'] ?? '');
+            if ($userType !== 'Processor') {
+                http_response_code(403);
+                echo json_encode(['success' => false, 'error' => 'Forbidden']);
+                break;
+            }
+
+            $userId = (int)($_SESSION['user_id'] ?? $_SESSION['id'] ?? 0);
+            if ($userId <= 0) {
+                http_response_code(400);
+                echo json_encode(['success' => false, 'error' => 'Missing user context']);
+                break;
+            }
+
+            // Reuse existing open processor->admin chat if present
+            $stmt = $pdo->prepare("SELECT chat_id FROM support_chats WHERE status = 'open' AND origin = 'processor' AND processor_user_id = ? ORDER BY last_activity_at DESC LIMIT 1");
+            $stmt->execute([$userId]);
+            $existingId = (int)($stmt->fetchColumn() ?: 0);
+            if ($existingId > 0) {
+                echo json_encode(['success' => true, 'chat_id' => $existingId, 'title' => 'Admin Support', 'subtitle' => 'Your request to admin']);
+                break;
+            }
+
+            $token = nfa_random_token(18);
+            $pdo->prepare('INSERT INTO support_chats (chat_token, origin, status, processor_user_id, last_activity_at) VALUES (?, ?, \'open\', ?, NOW())')
+                ->execute([$token, 'processor', $userId]);
+            $chatId = (int)$pdo->lastInsertId();
+
+            $pdo->prepare('INSERT INTO support_chat_messages (chat_id, sender_role, sender_user_id, message) VALUES (?, ?, ?, ?)')
+                ->execute([$chatId, 'system', null, 'Processor started a support chat.']);
+
+            echo json_encode(['success' => true, 'chat_id' => $chatId, 'title' => 'Admin Support', 'subtitle' => 'Your request to admin']);
+        } catch (PDOException $e) {
+            http_response_code(500);
+            echo json_encode(['success' => false, 'error' => 'Failed to start chat']);
         }
         break;
 }

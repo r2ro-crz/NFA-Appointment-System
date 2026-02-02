@@ -1,6 +1,7 @@
 <?php
 session_start();
 require_once 'php_helper/db_config.php';
+require_once __DIR__ . '/php_helper/branding.php';
 
 if (!isset($_SESSION["loggedin"]) || ($_SESSION["user_type"] ?? '') !== 'Processor') {
     header("location: login.php");
@@ -41,7 +42,8 @@ $today = date('Y-m-d');
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Walk-in Process</title>
+    <title><?php echo htmlspecialchars(nfa_page_title('Walk-in Process'), ENT_QUOTES, 'UTF-8'); ?></title>
+    <link rel="icon" href="<?php echo htmlspecialchars(NFA_FAVICON, ENT_QUOTES, 'UTF-8'); ?>" type="image/png"/>
     <link rel="stylesheet" href="css/style.css">
     <link rel="stylesheet" href="css/processor.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
@@ -50,10 +52,12 @@ $today = date('Y-m-d');
 
     <nav class="top-nav">
         <div class="logo">
-            <img src="img/nfa-logo.png" alt="NFA" class="nfa-logo">
+            <div class="brand-logos">
+                <img src="<?php echo htmlspecialchars(NFA_SYSTEM_LOGO, ENT_QUOTES, 'UTF-8'); ?>" alt="<?php echo htmlspecialchars(NFA_SYSTEM_NAME, ENT_QUOTES, 'UTF-8'); ?>" class="system-logo">
+            </div>
             <div class="logo-text">
-                <h1 class="nfa-title">National Food Authority</h1>
-                <p class="nfa-subtitle">Walk-in Process</p>
+                <h1 class="nfa-title"><?php echo htmlspecialchars(NFA_BRAND_NAME, ENT_QUOTES, 'UTF-8'); ?></h1>
+                <p class="nfa-subtitle"><span class="page-subtitle">Walk-in Process</span></p>
             </div>
         </div>
         <div class="user-actions">

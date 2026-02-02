@@ -101,6 +101,7 @@ if ($download) {
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Appointment Confirmation</title>
+    <link rel="icon" href="img/PalayPortal_logo.png" type="image/png"/>
     <?php if ($download): ?>
         <?php
         $css = @file_get_contents(__DIR__ . '/css/print_template.css');

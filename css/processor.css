@@ -188,6 +188,50 @@
     animation: pulse 2s infinite;
 }
 
+/* Support Inbox badge (live chat notification) */
+.support-inbox-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    margin-left: 0.5rem;
+    min-width: 1.25rem;
+    height: 1.25rem;
+    padding: 0 0.4rem;
+    border-radius: 999px;
+    background: var(--error-red);
+    color: #fff;
+    font-size: 0.72rem;
+    font-weight: 800;
+    line-height: 1;
+}
+
+.support-inbox-badge.pulse {
+    animation: nfaPulseBadge 0.9s ease-in-out 2;
+}
+
+@keyframes nfaPulseBadge {
+    0% { transform: scale(1); }
+    50% { transform: scale(1.18); }
+    100% { transform: scale(1); }
+}
+
+/* Profile button indicator (Support Inbox) */
+.user-profile.has-new-chat {
+    position: relative;
+}
+
+.user-profile.has-new-chat::after {
+    content: '';
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--error-red);
+    box-shadow: 0 0 0 3px rgba(231, 76, 60, 0.18);
+}
+
 @keyframes pulse {
     0% { transform: scale(1); }
     50% { transform: scale(1.1); }

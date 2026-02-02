@@ -5,6 +5,7 @@ document.addEventListener('DOMContentLoaded', function() {
     // Always initialize top navigation + notifications (shared across pages)
     initNavigation();
     initNotifications();
+    initSupportInboxNotifications();
     initWalkInQuickAction();
     initAutoCancelExpiredAppointments();
 
@@ -166,6 +167,86 @@ function initDashboardAutoRefresh({ intervalMs, idleGraceMs }) {
     };
 
     schedule(intervalMs);
+}
+
+function initSupportInboxNotifications() {
+    const supportLink = document.querySelector('a[href="support_inbox.php"], a[href="./support_inbox.php"]');
+    if (!supportLink) return;
+
+    const titleHost = supportLink.querySelector('.dropdown-item-title') || supportLink;
+    const baseTitle = document.title;
+    const profileBtn = document.querySelector('.user-profile');
+    let timerId = null;
+    let lastNeedsReply = null;
+
+    const ensureBadgeEl = () => {
+        let b = titleHost.querySelector('.support-inbox-badge');
+        if (b) return b;
+        b = document.createElement('span');
+        b.className = 'support-inbox-badge';
+        titleHost.appendChild(b);
+        return b;
+    };
+
+    const setBadgeCount = (count, didIncrease) => {
+        const n = parseInt(count || 0, 10) || 0;
+        if (n <= 0) {
+            const old = titleHost.querySelector('.support-inbox-badge');
+            if (old) old.remove();
+            document.title = baseTitle;
+            if (profileBtn) profileBtn.classList.remove('has-new-chat');
+            return;
+        }
+
+        const b = ensureBadgeEl();
+        b.textContent = String(n);
+        b.classList.toggle('pulse', !!didIncrease);
+        if (didIncrease) {
+            setTimeout(() => {
+                try { b.classList.remove('pulse'); } catch (_) {}
+            }, 1600);
+        }
+
+        document.title = `(${n}) ${baseTitle}`;
+
+        // Profile button indicator (icon/dot)
+        if (profileBtn) profileBtn.classList.add('has-new-chat');
+    };
+
+    const poll = async () => {
+        timerId = null;
+
+        if (document.visibilityState !== 'visible') {
+            schedule();
+            return;
+        }
+
+        try {
+            const res = await fetch('php_helper/api.php?action=staffSupportChatNotificationSummary', { cache: 'no-store' });
+            const data = await res.json().catch(() => null);
+            if (!data || !data.success) {
+                setBadgeCount(0, false);
+                schedule();
+                return;
+            }
+
+            const needs = parseInt(data.needs_reply_count || 0, 10) || 0;
+            const didIncrease = lastNeedsReply !== null && needs > lastNeedsReply;
+            lastNeedsReply = needs;
+            setBadgeCount(needs, didIncrease);
+        } catch (_) {
+            // ignore transient failures
+        }
+
+        schedule();
+    };
+
+    const schedule = () => {
+        if (timerId) clearTimeout(timerId);
+        timerId = setTimeout(poll, 15 * 1000);
+    };
+
+    poll();
 }
 
 // Navigation and UI Interactions

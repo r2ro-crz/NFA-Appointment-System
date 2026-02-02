@@ -1,0 +1,191 @@
+/* Simple Support Chat UI (farmer + staff) */
+
+:root {
+  --chat-bg: rgba(18, 24, 32, 0.96);
+  --chat-panel: rgba(255, 255, 255, 0.08);
+  --chat-border: rgba(255, 255, 255, 0.14);
+  --chat-text: rgba(255, 255, 255, 0.92);
+  --chat-muted: rgba(255, 255, 255, 0.72);
+  --chat-accent: var(--nfa-green, #007a33);
+}
+
+.support-chat-fab {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 2000;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--chat-border);
+  background: var(--chat-bg);
+  color: var(--chat-text);
+  box-shadow: 0 16px 40px rgba(0,0,0,0.35);
+  cursor: pointer;
+  user-select: none;
+}
+
+.support-chat-fab i { color: var(--chat-accent); }
+
+.support-chat-shell {
+  position: fixed;
+  right: 18px;
+  bottom: 78px;
+  width: min(380px, calc(100vw - 36px));
+  height: 520px;
+  z-index: 2000;
+  border-radius: 16px;
+  border: 1px solid var(--chat-border);
+  background: var(--chat-bg);
+  color: var(--chat-text);
+  color-scheme: dark;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.45);
+  overflow: hidden;
+  display: none;
+}
+
+.support-chat-shell.open { display: flex; flex-direction: column; }
+
+.support-chat-head {
+  padding: 12px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  background: linear-gradient(180deg, rgba(255,255,255,0.08), rgba(255,255,255,0));
+  border-bottom: 1px solid var(--chat-border);
+}
+
+.support-chat-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 700;
+}
+
+.support-chat-title .badge {
+  font-size: 12px;
+  color: var(--chat-muted);
+  border: 1px solid var(--chat-border);
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+
+.support-chat-actions { display: flex; gap: 8px; }
+
+.support-chat-btn {
+  border: 1px solid var(--chat-border);
+  background: rgba(255,255,255,0.06);
+  color: var(--chat-text);
+  padding: 6px 10px;
+  border-radius: 10px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.support-chat-btn.primary {
+  border-color: rgba(0,122,51,0.55);
+  background: rgba(0,122,51,0.18);
+}
+
+.support-chat-body {
+  flex: 1;
+  padding: 12px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.support-chat-empty {
+  padding: 10px;
+  color: var(--chat-muted);
+  border: 1px dashed var(--chat-border);
+  border-radius: 14px;
+  text-align: center;
+}
+
+.support-chat-bubble {
+  max-width: 86%;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid var(--chat-border);
+  background: rgba(255,255,255,0.06);
+  line-height: 1.35;
+}
+
+.support-chat-bubble.me {
+  align-self: flex-end;
+  border-color: rgba(0,122,51,0.4);
+  background: rgba(0,122,51,0.14);
+}
+
+.support-chat-meta {
+  font-size: 11px;
+  color: var(--chat-muted);
+  margin-top: 6px;
+}
+
+.support-chat-foot {
+  padding: 10px 12px;
+  border-top: 1px solid var(--chat-border);
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+}
+
+.support-chat-input {
+  width: 100%;
+  padding: 10px 10px;
+  border-radius: 12px;
+  border: 1px solid var(--chat-border);
+  background: rgba(255,255,255,0.06);
+  color: var(--chat-text);
+  outline: none;
+}
+
+.support-chat-input::placeholder { color: rgba(255,255,255,0.55); }
+
+.support-chat-select {
+  width: 100%;
+  padding: 10px 10px;
+  border-radius: 12px;
+  border: 1px solid var(--chat-border);
+  background: rgba(255,255,255,0.06);
+  color: var(--chat-text);
+  outline: none;
+}
+
+/* Ensure native dropdown list stays readable on Windows/Chrome/Edge.
+   Without this, white text can render on a white option list background,
+   making options appear blank until hovered. */
+.support-chat-select option,
+.support-chat-select optgroup {
+  color: #111;
+  background: #fff;
+}
+
+.support-chat-select:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.support-chat-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.support-chat-row {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+}
+
+.support-chat-note { font-size: 12px; color: var(--chat-muted); }
+
+@media (prefers-reduced-motion: reduce) {
+  .support-chat-shell, .support-chat-fab { scroll-behavior: auto; }
+}

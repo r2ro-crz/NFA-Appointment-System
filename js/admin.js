@@ -1,8 +1,115 @@
 document.addEventListener('DOMContentLoaded', function () {
+    applyUserSettings();
+
     setupDropdowns();
     setupAdminAccountNotifications();
+    initSupportInboxNotifications();
     setupRecentActivitySearch();
+
+    // Timed auto-refresh for Admin Dashboard only (separate from change-token refresh)
+    const isAdminDashboard = !!document.getElementById('recentActivityTable');
+    if (isAdminDashboard && getUserSettings().autoRefresh && !isGlobalRefreshDisabled()) {
+        initDashboardAutoRefresh({ intervalMs: 60 * 1000, idleGraceMs: 8000 });
+    }
 });
+
+function getUserSettings() {
+    const defaults = { autoRefresh: true, compact: false, reduceMotion: false, toasts: true };
+    try {
+        const raw = localStorage.getItem('nfa_settings_v1');
+        const obj = raw ? JSON.parse(raw) : null;
+        return {
+            autoRefresh: obj?.autoRefresh ?? defaults.autoRefresh,
+            compact: obj?.compact ?? defaults.compact,
+            reduceMotion: obj?.reduceMotion ?? defaults.reduceMotion,
+            toasts: obj?.toasts ?? defaults.toasts
+        };
+    } catch (_) {
+        return defaults;
+    }
+}
+
+function applyUserSettings() {
+    const s = getUserSettings();
+    window.__nfaSettings = s;
+    document.body.classList.toggle('pref-compact', !!s.compact);
+    document.body.classList.toggle('pref-reduce-motion', !!s.reduceMotion);
+}
+
+function isGlobalRefreshDisabled() {
+    try {
+        const url = new URL(window.location.href);
+        if (url.searchParams.get('norefresh') === '1') return true;
+    } catch (_) {
+        // ignore
+    }
+
+    try {
+        const pref = localStorage.getItem('nfa_auto_refresh');
+        if (pref && String(pref).toLowerCase() === 'off') return true;
+    } catch (_) {
+        // ignore
+    }
+
+    return false;
+}
+
+function initDashboardAutoRefresh({ intervalMs, idleGraceMs }) {
+    let lastUserActivity = Date.now();
+    let timerId = null;
+
+    const markActivity = () => {
+        lastUserActivity = Date.now();
+    };
+
+    const isTyping = () => {
+        const active = document.activeElement;
+        if (!active || !active.tagName) return false;
+        const tag = String(active.tagName).toUpperCase();
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true;
+        if (active.isContentEditable) return true;
+        return false;
+    };
+
+    ['click', 'keydown', 'mousemove', 'scroll', 'touchstart'].forEach(evt => {
+        window.addEventListener(evt, markActivity, { passive: true });
+    });
+
+    const shouldDeferRefresh = () => {
+        if (document.visibilityState !== 'visible') return true;
+        if (Date.now() - lastUserActivity < idleGraceMs) return true;
+        if (isTyping()) return true;
+
+        const notifDropdown = document.getElementById('notifDropdown');
+        if (notifDropdown && notifDropdown.classList.contains('show')) return true;
+
+        const userDropdown = document.getElementById('userDropdown');
+        if (userDropdown && userDropdown.classList.contains('show')) return true;
+
+        const loadingOverlay = document.getElementById('loadingOverlay');
+        if (loadingOverlay && loadingOverlay.classList.contains('active')) return true;
+
+        return false;
+    };
+
+    const tick = () => {
+        timerId = null;
+
+        if (shouldDeferRefresh()) {
+            schedule(Math.min(15 * 1000, intervalMs));
+            return;
+        }
+
+        window.location.reload();
+    };
+
+    const schedule = (delay) => {
+        if (timerId) clearTimeout(timerId);
+        timerId = setTimeout(tick, delay);
+    };
+
+    schedule(intervalMs);
+}
 
 function setupRecentActivitySearch() {
     const search = document.getElementById('recentActivitySearch');
@@ -302,4 +409,86 @@ async function postJson(action, payload) {
     } catch (_) {
         return { success: false, message: 'Invalid server response' };
     }
+}
+
+function initSupportInboxNotifications() {
+    const supportLink = document.querySelector('a[href="support_inbox.php"], a[href="./support_inbox.php"]');
+    if (!supportLink) return;
+
+    const titleHost = supportLink.querySelector('.dropdown-item-title') || supportLink;
+    const baseTitle = document.title;
+    const profileBtn = document.querySelector('.user-profile');
+    let timerId = null;
+    let lastNeedsReply = null;
+
+    const ensureBadgeEl = () => {
+        let b = titleHost.querySelector('.support-inbox-badge');
+        if (b) return b;
+        b = document.createElement('span');
+        b.className = 'support-inbox-badge';
+        titleHost.appendChild(b);
+        return b;
+    };
+
+    const setBadgeCount = (count, didIncrease) => {
+        const n = parseInt(count || 0, 10) || 0;
+        if (n <= 0) {
+            const old = titleHost.querySelector('.support-inbox-badge');
+            if (old) old.remove();
+            document.title = baseTitle;
+            if (profileBtn) profileBtn.classList.remove('has-new-chat');
+            return;
+        }
+
+        const b = ensureBadgeEl();
+        b.textContent = String(n);
+        b.classList.toggle('pulse', !!didIncrease);
+        if (didIncrease) {
+            setTimeout(() => {
+                try { b.classList.remove('pulse'); } catch (_) {}
+            }, 1600);
+        }
+
+        // Title hint (helps even if dropdown is closed)
+        document.title = `(${n}) ${baseTitle}`;
+
+        // Profile button indicator (icon/dot)
+        if (profileBtn) profileBtn.classList.add('has-new-chat');
+    };
+
+    const poll = async () => {
+        timerId = null;
+
+        if (document.visibilityState !== 'visible') {
+            schedule();
+            return;
+        }
+
+        try {
+            const res = await fetch('php_helper/api.php?action=staffSupportChatNotificationSummary', { cache: 'no-store' });
+            const data = await res.json().catch(() => null);
+            if (!data || !data.success) {
+                setBadgeCount(0, false);
+                schedule();
+                return;
+            }
+
+            const needs = parseInt(data.needs_reply_count || 0, 10) || 0;
+            const didIncrease = lastNeedsReply !== null && needs > lastNeedsReply;
+            lastNeedsReply = needs;
+            setBadgeCount(needs, didIncrease);
+        } catch (_) {
+            // ignore transient failures
+        }
+
+        schedule();
+    };
+
+    const schedule = () => {
+        if (timerId) clearTimeout(timerId);
+        timerId = setTimeout(poll, 15 * 1000);
+    };
+
+    // Immediate check + background polling.
+    poll();
 }

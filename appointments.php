@@ -1,6 +1,7 @@
 <?php
 session_start();
 require_once 'php_helper/db_config.php';
+require_once __DIR__ . '/php_helper/branding.php';
 
 if (!isset($_SESSION["loggedin"]) || $_SESSION["user_type"] !== 'Processor') {
     header("location: login.php");
@@ -181,7 +182,8 @@ $new_count = count(array_filter($notifications, fn($n) => (empty($n['is_read']) 
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>All Appointments - Calendar View</title>
+    <title><?php echo htmlspecialchars(nfa_page_title('Appointments'), ENT_QUOTES, 'UTF-8'); ?></title>
+    <link rel="icon" href="<?php echo htmlspecialchars(NFA_FAVICON, ENT_QUOTES, 'UTF-8'); ?>" type="image/png"/>
     <link rel="stylesheet" href="css/style.css">
     <link rel="stylesheet" href="css/processor.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
@@ -190,10 +192,12 @@ $new_count = count(array_filter($notifications, fn($n) => (empty($n['is_read']) 
     <!-- Reuse top navigation from processor dashboard -->
     <nav class="top-nav">
         <div class="logo">
-            <img src="img/nfa-logo.png" alt="NFA" class="nfa-logo">
+            <div class="brand-logos">
+                <img src="<?php echo htmlspecialchars(NFA_SYSTEM_LOGO, ENT_QUOTES, 'UTF-8'); ?>" alt="<?php echo htmlspecialchars(NFA_SYSTEM_NAME, ENT_QUOTES, 'UTF-8'); ?>" class="system-logo">
+            </div>
             <div class="logo-text">
-                <h1 class="nfa-title">National Food Authority</h1>
-                <p class="nfa-subtitle">Appointment Overview</p>
+                <h1 class="nfa-title"><?php echo htmlspecialchars(NFA_BRAND_NAME, ENT_QUOTES, 'UTF-8'); ?></h1>
+                <p class="nfa-subtitle"><span class="page-subtitle">Appointment Overview</span></p>
             </div>
         </div>
         <div class="nav-center">
@@ -328,6 +332,14 @@ $new_count = count(array_filter($notifications, fn($n) => (empty($n['is_read']) 
                             <span class="dropdown-item-content">
                                 <span class="dropdown-item-title">Settings</span>
                                 <span class="dropdown-item-desc">Preferences and appearance</span>
+                            </span>
+                            <i class="fas fa-chevron-right dropdown-item-arrow"></i>
+                        </a>
+                        <a href="support_inbox.php" class="dropdown-item">
+                            <i class="fas fa-headset"></i>
+                            <span class="dropdown-item-content">
+                                <span class="dropdown-item-title">Support Inbox</span>
+                                <span class="dropdown-item-desc">Farmer live chats</span>
                             </span>
                             <i class="fas fa-chevron-right dropdown-item-arrow"></i>
                         </a>
@@ -619,5 +631,9 @@ $new_count = count(array_filter($notifications, fn($n) => (empty($n['is_read']) 
     <script src="js/refresh_bus.js?v=<?php echo urlencode((string)@filemtime(__DIR__ . '/js/refresh_bus.js')); ?>"></script>
     <script src="js/processor.js?v=<?php echo urlencode((string)@filemtime(__DIR__ . '/js/processor.js')); ?>"></script>
     <script src="js/appointments.js?v=<?php echo urlencode((string)@filemtime(__DIR__ . '/js/appointments.js')); ?>"></script>
+    <script src="js/auto_refresh.js?v=<?php echo urlencode((string)@filemtime(__DIR__ . '/js/auto_refresh.js')); ?>"></script>
+    <script>
+        window.NFAAutoRefresh && window.NFAAutoRefresh.start({ scope: 'processor', intervalMs: 15000, idleMs: 9000 });
+    </script>
 </body>
 </html>

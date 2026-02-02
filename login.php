@@ -40,8 +40,8 @@ if (isset($_GET['locked']) && $_GET['locked'] == 1) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>NFA Staff Login - Secure Access Portal</title>
-    <link rel="icon" href="img/nfa-logo.png" type="image/png"/>
+    <title>NFA PalayPortal | Staff Login</title>
+    <link rel="icon" href="img/PalayPortal_logo.png" type="image/png"/>
     <link rel="stylesheet" href="css/login.css">
     <link rel="stylesheet" href="css/legal_modal.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
@@ -60,9 +60,11 @@ if (isset($_GET['locked']) && $_GET['locked'] == 1) {
         <!-- Header with logo -->
         <div class="login-header">
             <div class="logo-wrapper">
-                <img src="img/nfa-logo.png" alt="NFA Logo" class="login-logo">
+                <div class="brand-logos">
+                    <img src="img/PalayPortal_logo.png" alt="PalayPortal" class="system-logo">
+                </div>
                 <div class="logo-text">
-                    <h1>National Food Authority</h1>
+                    <h1>NFA PalayPortal</h1>
                     <p class="department-tag">Staff Access Portal</p>
                 </div>
             </div>
@@ -218,7 +220,7 @@ if (isset($_GET['locked']) && $_GET['locked'] == 1) {
                 </p>
                 <div class="footer-links">
                     <a href="#" data-legal-modal="privacy"><i class="fas fa-user-shield"></i> Privacy Policy</a>
-                    <a href="#"><i class="fas fa-headset"></i> IT Support</a>
+                    <a href="landing.html?chat=1"><i class="fas fa-headset"></i> Chat Support</a>
                 </div>
             </div>
         </div>

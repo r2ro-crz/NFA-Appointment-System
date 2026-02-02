@@ -113,6 +113,44 @@
 
         updateToneUI(getTone(percent));
         setUpdatedText(Date.now());
+
+        renderFreeze(data.appointment_freeze || null);
+    };
+
+    const renderFreeze = (freeze) => {
+        const statusEl = $('#freezeStatusText');
+        const hintEl = $('#freezeStatusHint');
+        const btn = $('#btnToggleFreeze');
+        if (!statusEl || !btn) return;
+
+        if (!freeze) {
+            statusEl.textContent = 'Freeze status unavailable.';
+            if (hintEl) hintEl.textContent = '';
+            btn.disabled = true;
+            return;
+        }
+
+        const manual = !!freeze.manual_frozen;
+        const isFull = !!freeze.is_full;
+        const effective = !!freeze.effective_frozen;
+
+        if (effective) {
+            statusEl.textContent = isFull ? 'Blocked (Warehouse Full)' : 'Frozen (Manual)';
+        } else {
+            statusEl.textContent = 'Accepting new appointments';
+        }
+
+        if (hintEl) {
+            const msg = (freeze && freeze.message) ? String(freeze.message) : '';
+            hintEl.textContent = msg ? ` — ${msg}` : '';
+        }
+
+        btn.disabled = false;
+        btn.classList.remove('btn-inline-primary', 'btn-inline-secondary');
+        btn.classList.add(manual ? 'btn-inline-primary' : 'btn-inline-secondary');
+        btn.innerHTML = manual
+            ? '<i class="fas fa-snowflake"></i> Unfreeze'
+            : '<i class="fas fa-snowflake"></i> Freeze';
     };
 
     const state = {
@@ -143,6 +181,19 @@
         return data.data;
     };
 
+    const setAppointmentFreeze = async ({ isFrozen, reason }) => {
+        const res = await fetch('php_helper/api.php?action=processorSetAppointmentFreeze', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ is_frozen: isFrozen ? 1 : 0, reason: reason || '' })
+        });
+        const json = await res.json().catch(() => null);
+        if (!res.ok || !json || !json.success) {
+            throw new Error((json && json.error) ? json.error : 'Failed to update freeze status.');
+        }
+        return json.data;
+    };
+
     const withLoading = async (message, disabledEls, fn) => {
         const loader = window.NFALoading;
         if (loader && typeof loader.withLoading === 'function') {
@@ -159,10 +210,12 @@
 
         const capEl = $('#capInputCapacity');
         const invEl = $('#capInputInventory');
+        const reasonEl = $('#capInputReason');
         const data = state.lastData || loadFromStore() || { warehouse_capacity: 0, inventory: 0 };
 
         if (capEl) capEl.value = String(Math.round(Number(data.warehouse_capacity || 0)));
         if (invEl) invEl.value = String(Math.round(Number(data.inventory || 0)));
+        if (reasonEl) reasonEl.value = '';
 
         updateModalComputed();
         modal.style.display = 'flex';
@@ -231,6 +284,8 @@
         const { capacity, inventory, isError } = updateModalComputed();
         if (isError) return;
 
+        const reason = ($('#capInputReason')?.value || '').trim();
+
         const ok = (typeof confirmDialog === 'function')
             ? await confirmDialog({
                 title: 'Save Capacity Changes',
@@ -250,7 +305,8 @@
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     warehouse_capacity: capacity,
-                    inventory: inventory
+                    inventory: inventory,
+                    reason: reason
                 })
             });
 
@@ -310,6 +366,7 @@
         const openBtn = $('#btnOpenModal');
         const heroBtn = $('#btnEditCapacity');
         const modal = $('#capacityModal');
+        const freezeBtn = $('#btnToggleFreeze');
 
         refreshBtn && refreshBtn.addEventListener('click', async () => {
             await withLoading('Refreshing capacity…', [refreshBtn], async () => {
@@ -321,6 +378,59 @@
 
         openBtn && openBtn.addEventListener('click', openModal);
         heroBtn && heroBtn.addEventListener('click', openModal);
+
+        freezeBtn && freezeBtn.addEventListener('click', async () => {
+            const cur = state.lastData && state.lastData.appointment_freeze ? state.lastData.appointment_freeze : null;
+            const manual = !!(cur && cur.manual_frozen);
+
+            if (manual) {
+                const ok = (typeof confirmDialog === 'function')
+                    ? await confirmDialog({
+                        title: 'Unfreeze Appointments',
+                        message: 'Allow new appointments again for this branch?',
+                        confirmText: 'Yes, Unfreeze',
+                        cancelText: 'Cancel',
+                        tone: 'primary'
+                    })
+                    : window.confirm('Unfreeze new appointments for this branch?');
+                if (!ok) return;
+
+                await withLoading('Unfreezing…', [freezeBtn], async () => {
+                    await setAppointmentFreeze({ isFrozen: false, reason: '' });
+                    const latest = await fetchCapacity();
+                    state.lastData = latest;
+                    render(latest, { animate: false });
+                });
+                if (typeof showToast === 'function') showToast('Appointments unfrozen.', 'success');
+                return;
+            }
+
+            let reason = '';
+            try {
+                reason = String(window.prompt('Reason for freezing (optional):', '') || '').trim();
+            } catch {
+                reason = '';
+            }
+
+            const ok = (typeof confirmDialog === 'function')
+                ? await confirmDialog({
+                    title: 'Freeze Appointments',
+                    message: 'Freeze new appointments for this branch until inventory is moved out?',
+                    confirmText: 'Yes, Freeze',
+                    cancelText: 'Cancel',
+                    tone: 'warning'
+                })
+                : window.confirm('Freeze new appointments for this branch?');
+            if (!ok) return;
+
+            await withLoading('Freezing…', [freezeBtn], async () => {
+                await setAppointmentFreeze({ isFrozen: true, reason });
+                const latest = await fetchCapacity();
+                state.lastData = latest;
+                render(latest, { animate: false });
+            });
+            if (typeof showToast === 'function') showToast('Appointments frozen.', 'success');
+        });
 
         $('#capModalClose') && $('#capModalClose').addEventListener('click', closeModal);
         $('#capCancel') && $('#capCancel').addEventListener('click', closeModal);

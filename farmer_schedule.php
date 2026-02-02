@@ -1,17 +1,21 @@
-﻿<!DOCTYPE html>
+﻿<?php
+require_once __DIR__ . '/php_helper/branding.php';
+?>
+<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <link rel="icon" href="https://public-frontend-cos.metadl.com/mgx/img/favicon.png" type="image/png">
-    <title>NFA Farmer's Appointment System - Schedule Your Visit</title>
+    <link rel="icon" href="<?php echo htmlspecialchars(NFA_FAVICON, ENT_QUOTES, 'UTF-8'); ?>" type="image/png">
+    <title><?php echo htmlspecialchars(nfa_page_title('Schedule Appointment'), ENT_QUOTES, 'UTF-8'); ?></title>
     <link rel="stylesheet" href="css/style.css">
     <link rel="stylesheet" href="css/legal_modal.css">
+    <link rel="stylesheet" href="css/chat.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <!-- Google reCAPTCHA v2 -->
     <script src="https://www.google.com/recaptcha/api.js" async defer></script>
 </head>
-<body data-clear-inputs="true">
+<body data-clear-inputs="true" data-enable-support-chat="farmer">
     <!-- Progress tracking -->
     <div class="progress-tracker">
         <div class="progress-bar" id="progressBar"></div>
@@ -39,9 +43,11 @@
     <header class="header">
         <div class="container">
             <div class="logo">
-                <img src="img/nfa-logo.png" alt="NFA Logo" class="logo-img">
+                <div class="brand-logos">
+                    <img src="<?php echo htmlspecialchars(NFA_SYSTEM_LOGO, ENT_QUOTES, 'UTF-8'); ?>" alt="<?php echo htmlspecialchars(NFA_SYSTEM_NAME, ENT_QUOTES, 'UTF-8'); ?>" class="system-logo">
+                </div>
                 <div class="logo-text">
-                    <h1>National Food Authority</h1>
+                    <h1><?php echo htmlspecialchars(NFA_BRAND_NAME, ENT_QUOTES, 'UTF-8'); ?></h1>
                     <p>Farmer's Appointment System</p>
                 </div>
             </div>
@@ -166,6 +172,14 @@
                                         <div>
                                             <strong>Daily Appointments:</strong> <span id="dailyAppointments">--</span>
                                         </div>
+                                    </div>
+                                </div>
+
+                                <div class="freeze-notice" id="freezeNotice" style="display: none;" role="alert" aria-live="polite">
+                                    <div class="freeze-notice-icon"><i class="fas fa-snowflake"></i></div>
+                                    <div class="freeze-notice-content">
+                                        <div class="freeze-notice-title">Appointment intake is paused for this branch</div>
+                                        <div class="freeze-notice-text" id="freezeNoticeText"></div>
                                     </div>
                                 </div>
                             </div>
@@ -663,7 +677,7 @@
                             <a href="mailto:publicaffairs@nfa.gov.ph" class="contact-link" target="_blank" rel="noopener noreferrer">
                                 <i class="fas fa-envelope"></i> publicaffairs@nfa.gov.ph
                             </a>
-                            <a href="#" class="contact-link" data-legal-modal="contact">
+                            <a href="#" class="contact-link" data-support-chat="open">
                                 <i class="fas fa-comments"></i> Live Chat
                             </a>
                         </div>
@@ -687,7 +701,7 @@
                     <a href="#" data-legal-modal="privacy">Privacy Policy</a>
                     <a href="#" data-legal-modal="terms">Terms of Service</a>
                     <a href="#" data-legal-modal="faq">FAQ</a>
-                    <a href="#" data-legal-modal="contact">Contact Us</a>
+                    <a href="#" data-support-chat="open">Contact Us</a>
                 </div>
                 <div class="footer-info">
                     <p><i class="fas fa-copyright"></i> 2026 National Food Authority. All rights reserved.</p>
@@ -712,5 +726,6 @@
     <script src="js/loading_ui.js?v=<?php echo urlencode((string)@filemtime(__DIR__ . '/js/loading_ui.js')); ?>"></script>
     <script src="js/farmer_app.js"></script>
     <script src="js/legal_modal.js?v=20260119"></script>
+    <script src="js/support_chat_widget.js?v=<?php echo urlencode((string)@filemtime(__DIR__ . '/js/support_chat_widget.js')); ?>"></script>
 </body>
 </html>

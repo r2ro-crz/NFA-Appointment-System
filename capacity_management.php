@@ -1,6 +1,7 @@
 <?php
 session_start();
 require_once 'php_helper/db_config.php';
+require_once __DIR__ . '/php_helper/branding.php';
 
 if (!isset($_SESSION["loggedin"]) || ($_SESSION["user_type"] ?? '') !== 'Processor') {
     header("location: login.php");
@@ -78,7 +79,8 @@ $new_count = count(array_filter($notifications, fn($n) => (empty($n['is_read']) 
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Capacity Management</title>
+    <title><?php echo htmlspecialchars(nfa_page_title('Capacity Management'), ENT_QUOTES, 'UTF-8'); ?></title>
+    <link rel="icon" href="<?php echo htmlspecialchars(NFA_FAVICON, ENT_QUOTES, 'UTF-8'); ?>" type="image/png"/>
     <link rel="stylesheet" href="css/style.css">
     <link rel="stylesheet" href="css/processor.css">
     <link rel="stylesheet" href="css/capacity_management.css?v=<?php echo urlencode((string)@filemtime(__DIR__ . '/css/capacity_management.css')); ?>">
@@ -97,10 +99,12 @@ $new_count = count(array_filter($notifications, fn($n) => (empty($n['is_read']) 
 
     <nav class="top-nav">
         <div class="logo">
-            <img src="img/nfa-logo.png" alt="NFA" class="nfa-logo">
+            <div class="brand-logos">
+                <img src="<?php echo htmlspecialchars(NFA_SYSTEM_LOGO, ENT_QUOTES, 'UTF-8'); ?>" alt="<?php echo htmlspecialchars(NFA_SYSTEM_NAME, ENT_QUOTES, 'UTF-8'); ?>" class="system-logo">
+            </div>
             <div class="logo-text">
-                <h1 class="nfa-title">National Food Authority</h1>
-                <p class="nfa-subtitle">Capacity Management</p>
+                <h1 class="nfa-title"><?php echo htmlspecialchars(NFA_BRAND_NAME, ENT_QUOTES, 'UTF-8'); ?></h1>
+                <p class="nfa-subtitle"><span class="page-subtitle">Capacity Management</span></p>
             </div>
         </div>
 
@@ -236,6 +240,14 @@ $new_count = count(array_filter($notifications, fn($n) => (empty($n['is_read']) 
                             </span>
                             <i class="fas fa-chevron-right dropdown-item-arrow"></i>
                         </a>
+                        <a href="support_inbox.php" class="dropdown-item">
+                            <i class="fas fa-headset"></i>
+                            <span class="dropdown-item-content">
+                                <span class="dropdown-item-title">Support Inbox</span>
+                                <span class="dropdown-item-desc">Farmer live chats</span>
+                            </span>
+                            <i class="fas fa-chevron-right dropdown-item-arrow"></i>
+                        </a>
                         <div class="dropdown-divider"></div>
                         <a href="logout.php" class="dropdown-item logout"><i class="fas fa-sign-out-alt"></i> Logout</a>
                     </div>
@@ -353,6 +365,22 @@ $new_count = count(array_filter($notifications, fn($n) => (empty($n['is_read']) 
                     </div>
                 </div>
 
+                <div class="control-card" id="freezeControlCard">
+                    <div class="control-row">
+                        <div>
+                            <div class="control-title"><i class="fas fa-snowflake"></i> Appointment Intake</div>
+                            <div class="control-desc">
+                                <strong id="freezeStatusText">Loading…</strong>
+                                <span id="freezeStatusHint"></span>
+                            </div>
+                            <div class="control-desc">Use this when the warehouse is full to temporarily stop new appointments until inventory is moved out.</div>
+                        </div>
+                        <button class="btn-view-details btn-inline-secondary" id="btnToggleFreeze" type="button">
+                            <i class="fas fa-snowflake"></i> Freeze
+                        </button>
+                    </div>
+                </div>
+
                 <div class="control-card subtle">
                     <div class="control-row">
                         <div>
@@ -401,6 +429,10 @@ $new_count = count(array_filter($notifications, fn($n) => (empty($n['is_read']) 
                                 <span>Utilization</span>
                                 <div class="cap-readonly" id="capComputedPercent">0%</div>
                             </div>
+                            <label class="cap-field" style="grid-column: 1 / -1;">
+                                <span>Reason (optional)</span>
+                                <input type="text" id="capInputReason" maxlength="255" placeholder="e.g. Adjusted after physical warehouse count">
+                            </label>
                         </div>
                         <div class="cap-validation" id="capValidation" role="status" aria-live="polite"></div>
                     </div>
@@ -424,5 +456,9 @@ $new_count = count(array_filter($notifications, fn($n) => (empty($n['is_read']) 
     <script src="js/refresh_bus.js?v=<?php echo urlencode((string)@filemtime(__DIR__ . '/js/refresh_bus.js')); ?>"></script>
     <script src="js/processor.js?v=<?php echo urlencode((string)@filemtime(__DIR__ . '/js/processor.js')); ?>"></script>
     <script src="js/capacity_management.js?v=<?php echo urlencode((string)@filemtime(__DIR__ . '/js/capacity_management.js')); ?>"></script>
+    <script src="js/auto_refresh.js?v=<?php echo urlencode((string)@filemtime(__DIR__ . '/js/auto_refresh.js')); ?>"></script>
+    <script>
+        window.NFAAutoRefresh && window.NFAAutoRefresh.start({ scope: 'processor', intervalMs: 20000, idleMs: 8000 });
+    </script>
 </body>
 </html>

@@ -3,24 +3,29 @@
 $prefillRef = isset($_GET['ref']) ? (string)$_GET['ref'] : '';
 $prefillFarmerId = isset($_GET['farmer_id']) ? (string)$_GET['farmer_id'] : '';
 $prefillEmail = isset($_GET['email']) ? (string)$_GET['email'] : '';
+require_once __DIR__ . '/php_helper/branding.php';
 ?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>NFA Appointment Status Tracker</title>
+    <title><?php echo htmlspecialchars(nfa_page_title('Appointment Status Tracker'), ENT_QUOTES, 'UTF-8'); ?></title>
+    <link rel="icon" href="<?php echo htmlspecialchars(NFA_FAVICON, ENT_QUOTES, 'UTF-8'); ?>" type="image/png"/>
     <link rel="stylesheet" href="css/style.css">
     <link rel="stylesheet" href="css/tracker.css">
+    <link rel="stylesheet" href="css/chat.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 </head>
-<body class="tracker-page" data-clear-inputs="true">
+<body class="tracker-page" data-clear-inputs="true" data-enable-support-chat="farmer">
     <header class="header tracker-header">
         <div class="container">
             <div class="logo">
-                <img src="img/nfa-logo.png" alt="NFA Logo" class="logo-img">
+                <div class="brand-logos">
+                    <img src="<?php echo htmlspecialchars(NFA_SYSTEM_LOGO, ENT_QUOTES, 'UTF-8'); ?>" alt="<?php echo htmlspecialchars(NFA_SYSTEM_NAME, ENT_QUOTES, 'UTF-8'); ?>" class="system-logo">
+                </div>
                 <div class="logo-text">
-                    <h1>National Food Authority</h1>
+                    <h1><?php echo htmlspecialchars(NFA_BRAND_NAME, ENT_QUOTES, 'UTF-8'); ?></h1>
                     <p>Appointment Status Tracker</p>
                 </div>
             </div>
@@ -266,5 +271,6 @@ $prefillEmail = isset($_GET['email']) ? (string)$_GET['email'] : '';
     <script src="js/clear_inputs.js"></script>
     <script src="js/loading_ui.js?v=<?php echo urlencode((string)@filemtime(__DIR__ . '/js/loading_ui.js')); ?>"></script>
     <script src="js/appointment_tracker.js?v=<?php echo urlencode((string)@filemtime(__DIR__ . '/js/appointment_tracker.js')); ?>"></script>
+    <script src="js/support_chat_widget.js?v=<?php echo urlencode((string)@filemtime(__DIR__ . '/js/support_chat_widget.js')); ?>"></script>
 </body>
 </html>

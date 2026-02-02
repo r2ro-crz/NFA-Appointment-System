@@ -3,13 +3,14 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>NFA Appointment System - Welcome</title>
-    <link rel="icon" href="img/nfa-logo.png" type="image/png"/>
+    <title>NFA PalayPortal | Welcome</title>
+    <link rel="icon" href="img/PalayPortal_logo.png" type="image/png"/>
     <link rel="stylesheet" href="css/login.css"> 
     <link rel="stylesheet" href="css/legal_modal.css">
+    <link rel="stylesheet" href="css/chat.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 </head>
-<body class="landing-body">
+<body class="landing-body" data-enable-support-chat="farmer">
     <!-- Video background -->
     <video class="bg-video" autoplay muted loop playsinline>
         <source src="img/nfa-intro.mp4" type="video/mp4">
@@ -25,11 +26,13 @@
         <!-- Logo/Header area -->
         <div class="header-section">
             <div class="logo-container">
-                <img src="img/nfa-logo.png" alt="NFA Logo" class="nfa-logo">
+                <div class="brand-logos" style="justify-content:center;">
+                    <img src="img/PalayPortal_logo.png" alt="PalayPortal" class="system-logo" style="height:60px; width:auto;">
+                </div>
             </div>
             <h1 class="main-title">
-                <span class="title-line">National Food Authority</span>
-                <span class="subtitle-line">Farmer's Appointment Portal</span>
+                <span class="title-line">NFA PalayPortal</span>
+                <span class="subtitle-line">Your Direct Line to NFA.</span>
             </h1>
             <p class="welcome-text">Welcome to the official appointment system for rice farmers and NFA personnel. Please select your role to continue.</p>
         </div>
@@ -107,7 +110,7 @@
             <div class="footer-links">
                 <a id="privacyPolicyLink" data-legal-modal="privacy" href="#"><i class="fas fa-shield-alt"></i> Privacy Policy</a>
                 <a id="termsOfUseLink" data-legal-modal="terms" href="#"><i class="fas fa-file-alt"></i> Terms of Use</a>
-                <a id="helpCenterLink" data-legal-modal="help" href="#"><i class="fas fa-question-circle"></i> Help Center</a>
+                <a id="helpCenterLink" data-support-chat="open" href="#"><i class="fas fa-question-circle"></i> Help Center</a>
             </div>
         </div>
     </div>
@@ -229,5 +232,6 @@
     
     <script src="js/landing_app.js"></script>
     <script src="js/legal_modal.js?v=20260119"></script>
+    <script src="js/support_chat_widget.js?v=20260202"></script>
 </body>
 </html>
